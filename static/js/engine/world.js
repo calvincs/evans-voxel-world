@@ -330,26 +330,36 @@ export class World {
     }
   }
 
-  _spawnParticles(x, y, z) {
-    const N = 36;
+  _spawnParticles(x, y, z, opts = {}) {
+    const N = opts.count ?? 36;
+    const color = opts.color ?? 0xff8b2a;
+    const size = opts.size ?? 0.35;
+    const life = opts.life ?? 0.8;
+    const spBase = opts.spBase ?? 3, spRand = opts.spRand ?? 6, up = opts.up ?? 2;
     const pos = new Float32Array(N * 3);
     const vel = new Float32Array(N * 3);
     for (let i = 0; i < N; i++) {
       pos[i * 3] = x + 0.5; pos[i * 3 + 1] = y + 0.5; pos[i * 3 + 2] = z + 0.5;
-      const sp = 3 + Math.random() * 6;
+      const sp = spBase + Math.random() * spRand;
       const th = Math.random() * Math.PI * 2;
       const ph = Math.acos(2 * Math.random() - 1);
       vel[i * 3] = Math.sin(ph) * Math.cos(th) * sp;
-      vel[i * 3 + 1] = Math.abs(Math.cos(ph)) * sp + 2;
+      vel[i * 3 + 1] = Math.abs(Math.cos(ph)) * sp + up;
       vel[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * sp;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     const mat = new THREE.PointsMaterial({
-      color: 0xff8b2a, size: 0.35, transparent: true, depthWrite: false, fog: false });
+      color, size, transparent: true, depthWrite: false, fog: false });
     const points = new THREE.Points(geo, mat);
     this.scene.add(points);
-    this.particles.push({ points, vel, life: 0.8, maxLife: 0.8 });
+    this.particles.push({ points, vel, life, maxLife: life });
+  }
+
+  // A small puff of block-coloured dust when a block breaks.
+  spawnBreakBurst(x, y, z, color) {
+    this._spawnParticles(x, y, z,
+      { count: 12, color, size: 0.16, life: 0.5, spBase: 1.2, spRand: 3.5, up: 1.5 });
   }
 
   _updateEffects(dt) {

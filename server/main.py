@@ -220,6 +220,21 @@ async def world_ws(ws: WebSocket, wid: str):
             elif t == "fx":
                 # Ephemeral effect (explosion etc.) — relay only, no persistence.
                 await _broadcast(room, ws, msg)
+            elif t == "voice":
+                # WebRTC signaling. Tag the sender; deliver to one peer if a
+                # target id is given, otherwise to the whole room.
+                out = {**msg, "from": pid}
+                target = msg.get("to")
+                if target is None:
+                    await _broadcast(room, ws, out)
+                else:
+                    for w, st in list(room.items()):
+                        if st["id"] == target:
+                            try:
+                                await w.send_json(out)
+                            except Exception:
+                                pass
+                            break
     except (WebSocketDisconnect, KeyError, TypeError, ValueError):
         pass
     finally:

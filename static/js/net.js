@@ -50,6 +50,7 @@ export class Net {
       case 'edit':    h.onEdit && h.onEdit(m); break;
       case 'edits':   h.onEdits && h.onEdits(m.edits || []); break;
       case 'fx':      h.onFx && h.onFx(m); break;
+      case 'voice':   h.onVoice && h.onVoice(m); break;
     }
   }
 
@@ -65,4 +66,10 @@ export class Net {
   sendEdits(edits) { this._send({ type: 'edits', edits }); }
   // Ephemeral effect (e.g. an explosion) — relayed, never persisted.
   sendFx(kind, x, y, z) { this._send({ type: 'fx', kind, x, y, z }); }
+
+  // --- WebRTC voice signaling (relayed over the same socket) ---------------
+  // `to` omitted = broadcast to the room; present = targeted to one peer.
+  sendVoiceJoin(to) { this._send({ type: 'voice', sub: 'join', to }); }
+  sendVoiceLeave() { this._send({ type: 'voice', sub: 'leave' }); }
+  sendVoiceSignal(to, sub, data) { this._send({ type: 'voice', sub, to, ...data }); }
 }

@@ -7,6 +7,8 @@ import { Character } from './engine/character.js';
 import * as audio from './audio.js';
 
 const COLORS = [0xff6b6b, 0x4db6ff, 0xffd24d, 0xb084ff, 0x55d98a, 0xff9f40, 0xff7ad9];
+export const playerColor = (id) => COLORS[id % COLORS.length];
+export const SELF_COLOR = 0x3aa657;   // matches your own character's shirt
 
 export class RemotePlayers {
   constructor(scene) {
@@ -14,7 +16,7 @@ export class RemotePlayers {
     this.players = new Map();   // id -> { ch, cur, tgt, yaw, tyaw, pitch }
   }
 
-  _color(id) { return COLORS[id % COLORS.length]; }
+  _color(id) { return playerColor(id); }
 
   add(p) {
     if (!p || this.players.has(p.id)) return;

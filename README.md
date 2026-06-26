@@ -105,14 +105,35 @@ Several people on the same Wi-Fi can share a world:
 2. Find the host's local IP (`hostname -I` on Linux, e.g. `192.168.1.14`).
 3. Everyone else opens **`http://<host-ip>:8765`** in their browser, types their
    **name** in the menu, and picks the **same world**. You'll see each other's
-   characters (with name tags) move around, and blocks placed/broken by anyone
-   show up for everyone. Edits are saved to the host's world file.
+   characters (with name tags) move around, a **who's-online list** in the
+   corner, and blocks placed/broken by anyone — with **spatial sound** (you hear
+   footsteps, breaking, and TNT booms louder when they're closer). Edits are
+   saved to the host's world file.
 
 Playing over the *internet* (not just LAN) needs port-forwarding or a tunnel on
 the host — that's a network setup step outside the game.
 
-The server relays positions and edits over a WebSocket per world
+The server relays positions, edits and effect events over a WebSocket per world
 (`/api/worlds/<id>/ws`); see `server/main.py` and `static/js/net.js`.
+
+### Voice chat (proximity)
+
+Click the **🎙️ button** (top-right) to talk to nearby players — voice gets
+louder as you get closer and fades with distance (peer-to-peer WebRTC; the
+WebSocket only carries the setup handshake). Click again to mute.
+
+Browsers only allow microphone access over a **secure connection**, so for
+players on other devices you need HTTPS:
+
+```bash
+./tools/make_cert.sh                                   # one time: makes a self-signed cert
+EVANS_SSL_CERT=certs/cert.pem EVANS_SSL_KEY=certs/key.pem ./run.sh
+```
+
+Then open **`https://<host-ip>:8765`** on each device and accept the one-time
+"not secure" warning (it's your own certificate). On the host machine itself,
+`http://localhost:8765` already counts as secure, so voice works there without a
+cert.
 
 > Running a **second** server instance? Point it at a different data folder with
 > `EVANS_WORLDS_DIR=/some/dir ./run.sh` so the two don't fight over the same

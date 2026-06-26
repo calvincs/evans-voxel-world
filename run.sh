@@ -13,8 +13,18 @@ source .venv/bin/activate
 pip install -q --disable-pip-version-check -r requirements.txt
 
 PORT="${PORT:-8765}"
+
+# Optional HTTPS (needed for microphone / voice chat on non-localhost devices).
+# Set EVANS_SSL_CERT + EVANS_SSL_KEY, or run ./tools/make_cert.sh first.
+SSL_ARGS=()
+SCHEME="http"
+if [ -n "$EVANS_SSL_CERT" ] && [ -n "$EVANS_SSL_KEY" ]; then
+  SSL_ARGS=(--ssl-certfile "$EVANS_SSL_CERT" --ssl-keyfile "$EVANS_SSL_KEY")
+  SCHEME="https"
+fi
+
 echo ""
 echo "  Evan's Voxel World is running!"
-echo "  Open  ->  http://localhost:${PORT}"
+echo "  Open  ->  ${SCHEME}://localhost:${PORT}"
 echo ""
-exec uvicorn server.main:app --host 0.0.0.0 --port "$PORT" "$@"
+exec uvicorn server.main:app --host 0.0.0.0 --port "$PORT" "${SSL_ARGS[@]}" "$@"

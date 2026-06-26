@@ -35,6 +35,16 @@ const TILE = {
 // Blocks that emit light (rendered with an emissive glow material).
 export const isGlow = (b) => b === GLOWSTONE;
 
+// Representative colour per block, for break-dust particles.
+const BLOCK_COLOR = {
+  [GRASS]: 0x5fae3a, [DIRT]: 0x8a5a3b, [STONE]: 0x888888, [WOOD]: 0x6e4a28,
+  [LEAVES]: 0x3f7d2e, [SAND]: 0xddca8c, [WATER]: 0x2f6fd6, [PLANKS]: 0xc19a5b,
+  [GLASS]: 0xcfe0ff, [BRICK]: 0xa43b2a, [COBBLE]: 0x7e7e7e, [SNOW]: 0xeef3fa,
+  [PUMPKIN]: 0xe08a2a, [GOLD]: 0xf1c92e, [DIAMOND]: 0x56d6d6, [WOOL_RED]: 0xc63f3f,
+  [WOOL_BLUE]: 0x3f59c6, [TNT]: 0xc0392b, [FLINT]: 0x3b3f47, [GLOWSTONE]: 0xffcb52,
+};
+export const blockColor = (b) => BLOCK_COLOR[b] ?? 0xaaaaaa;
+
 export const BLOCKS = {
   [GRASS]:  { name: 'Grass',  top: TILE.grass_top, side: TILE.grass_side, bottom: TILE.dirt },
   [DIRT]:   { name: 'Dirt',   top: TILE.dirt,      side: TILE.dirt,       bottom: TILE.dirt },

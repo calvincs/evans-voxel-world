@@ -13,6 +13,9 @@ __pycache__/
 *.log
 .DS_Store
 
+# TLS certs (machine-specific, may contain a private key)
+/certs/
+
 # Large candidate music downloads — kept on disk, out of git. The canonical
 # override filenames the game actually loads are still allowed below.
 static/audio/*.mp3

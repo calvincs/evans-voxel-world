@@ -3,7 +3,7 @@
 // place.
 
 import * as THREE from 'three';
-import { isSolid, AIR, WATER, HOTBAR, TNT, FIRESTONE, isTool } from '../blocks.js';
+import { isSolid, AIR, WATER, HOTBAR, TNT, FIRESTONE, isTool, blockColor } from '../blocks.js';
 import * as audio from '../audio.js';
 import { Character } from './character.js';
 
@@ -303,7 +303,9 @@ export class Player {
   _break() {
     const r = this.raycast();
     if (!r) return;
+    const broken = this.world.getBlock(r.hit.x, r.hit.y, r.hit.z);
     this.world.setBlock(r.hit.x, r.hit.y, r.hit.z, AIR);
+    this.world.spawnBreakBurst(r.hit.x, r.hit.y, r.hit.z, blockColor(broken));
     audio.playBreak();
     if (this.onBreakPlace) this.onBreakPlace('break');
   }

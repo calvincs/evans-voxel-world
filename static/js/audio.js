@@ -14,7 +14,7 @@
 // resume() is called when the player engages.
 
 let ctx = null;
-let master = null, musicGain = null, sfxGain = null;
+let master = null, musicGain = null, sfxGain = null, voiceGain = null;
 let started = false;
 let musicOn = true;
 
@@ -43,6 +43,50 @@ function ensureCtx() {
   master = ctx.createGain(); master.gain.value = 0.55; master.connect(ctx.destination);
   musicGain = ctx.createGain(); musicGain.gain.value = 0.0; musicGain.connect(master);
   sfxGain = ctx.createGain(); sfxGain.gain.value = 0.7; sfxGain.connect(master);
+  voiceGain = ctx.createGain(); voiceGain.gain.value = 1.0; voiceGain.connect(master);
+}
+
+// Make sure the audio context exists and is running (used when joining voice).
+export function ensureAudio() {
+  ensureCtx();
+  if (ctx && ctx.state === 'suspended') ctx.resume();
+  return !!ctx;
+}
+
+// Route a remote voice MediaStream through a proximity-controlled node chain.
+// Returns a handle to update each frame, or null if audio is unavailable.
+export function voiceSink(stream) {
+  if (!ensureAudio()) return null;
+  // Chrome won't pull audio from a MediaStreamSource unless the stream is also
+  // consumed by an element; attach a muted <audio> to keep it flowing.
+  const el = new Audio();
+  el.srcObject = stream;
+  el.muted = true;
+  el.play().catch(() => {});
+  const src = ctx.createMediaStreamSource(stream);
+  const gain = ctx.createGain(); gain.gain.value = 0;
+  const panner = ctx.createStereoPanner();
+  src.connect(gain); gain.connect(panner); panner.connect(voiceGain);
+  return { src, gain, panner, el };
+}
+
+// Update a voice sink's volume/pan from the speaker's world position.
+export function setVoiceProximity(handle, pos, maxDist = 24) {
+  if (!handle || !listener) return;
+  const dx = pos.x - listener.x;
+  const dy = (pos.y ?? listener.y) - listener.y;
+  const dz = pos.z - listener.z;
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const g = Math.max(0, Math.min(1, (maxDist - dist) / (maxDist - 2)));  // full ≤2m, 0 at maxDist
+  handle.gain.gain.value = g;
+  const horiz = Math.hypot(dx, dz) || 1;
+  handle.panner.pan.value = Math.max(-1, Math.min(1, (dx * listener.rx + dz * listener.rz) / horiz)) * 0.7;
+}
+
+export function disposeVoiceSink(handle) {
+  if (!handle) return;
+  try { handle.src.disconnect(); handle.gain.disconnect(); handle.panner.disconnect(); } catch (_) {}
+  try { handle.el.pause(); handle.el.srcObject = null; } catch (_) {}
 }
 
 export function resume() {

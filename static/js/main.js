@@ -12,9 +12,10 @@ import { Sky } from './engine/sky.js';
 import { setupTouchControls } from './touch.js';
 import * as audio from './audio.js';
 import { Net } from './net.js';
-import { RemotePlayers } from './remoteplayers.js';
+import { RemotePlayers, playerColor, SELF_COLOR } from './remoteplayers.js';
+import { Voice } from './voice.js';
 import {
-  buildAtlasTexture, BLOCKS, HOTBAR, ATLAS_COLS, TILE_PX,
+  buildAtlasTexture, BLOCKS, HOTBAR, ATLAS_COLS, TILE_PX, blockColor,
 } from './blocks.js';
 
 const $ = (id) => document.getElementById(id);
@@ -143,15 +144,25 @@ async function startGame(worldId, demo) {
 
   // Multiplayer: stream our position and apply others' edits + movements.
   const remotes = new RemotePlayers(scene);
-  const net = new Net(worldId, playerName(), {
-    onWelcome: (id, players) => players.forEach((p) => remotes.add(p)),
-    onJoin: (p) => remotes.add(p),
-    onLeave: (id) => remotes.remove(id),
+  const myName = playerName();
+  const roster = new Map();       // id -> { name }
+  const voiceIds = new Set();     // ids currently in voice
+  const net = new Net(worldId, myName, {
+    onWelcome: (id, players) => { players.forEach((p) => { remotes.add(p); roster.set(p.id, { name: p.name }); }); renderRoster(); },
+    onJoin: (p) => { remotes.add(p); roster.set(p.id, { name: p.name }); renderRoster(); },
+    onLeave: (id) => { remotes.remove(id); roster.delete(id); voiceIds.delete(id); renderRoster(); },
     onPos: (m) => remotes.setPos(m),
     onEdit: (m) => {
-      world.setBlock(m.x, m.y, m.z, m.block, false);
-      // Hear other players placing/breaking, in space (0 == AIR == a break).
-      audio[m.block === 0 ? 'playBreak' : 'playPlace']({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
+      const pos = { x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 };
+      if (m.block === 0) {
+        const broken = world.getBlock(m.x, m.y, m.z);    // colour before removing
+        world.setBlock(m.x, m.y, m.z, 0, false);
+        world.spawnBreakBurst(m.x, m.y, m.z, blockColor(broken));
+        audio.playBreak(pos);
+      } else {
+        world.setBlock(m.x, m.y, m.z, m.block, false);
+        audio.playPlace(pos);
+      }
     },
     onEdits: (edits) => edits.forEach((e) => world.setBlock(e.x, e.y, e.z, e.block, false)),
     onFx: (m) => {
@@ -163,9 +174,68 @@ async function startGame(worldId, demo) {
         audio.playIgnite({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
       }
     },
+    onVoice: (m) => voice.handle(m),
   });
   world.net = net;
-  window.game = { world, player, sky, remotes, net };
+
+  // Proximity voice chat (WebRTC). Peer audio is positioned by where that
+  // player is, via remotes' interpolated positions.
+  const voice = new Voice(net, () => net.myId, (id) => {
+    const r = remotes.players.get(id);
+    return r ? r.cur : null;
+  });
+  voice.onRoster = (id, inVoice) => { if (inVoice) voiceIds.add(id); else voiceIds.delete(id); renderRoster(); };
+  voice.onState = () => { updateVoiceButton(); renderRoster(); };
+  setupVoiceButton(voice);
+
+  function renderRoster() {
+    const el = $('roster');
+    el.innerHTML = '';
+    if (roster.size === 0) return;            // solo: keep it clean
+    const rows = [{ id: net.myId, name: `${myName} (you)`, color: SELF_COLOR,
+                    mic: voice.enabled && !voice.muted, me: true }];
+    for (const [id, info] of roster) rows.push({ id, name: info.name, color: playerColor(id), mic: voiceIds.has(id) });
+    for (const r of rows) {
+      const row = document.createElement('div');
+      row.className = 'row' + (r.me ? ' me' : '');
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = '#' + r.color.toString(16).padStart(6, '0');
+      row.appendChild(dot);
+      const nm = document.createElement('span'); nm.textContent = r.name; row.appendChild(nm);
+      if (r.mic) { const mic = document.createElement('span'); mic.className = 'mic'; mic.textContent = '🎙️'; row.appendChild(mic); }
+      el.appendChild(row);
+    }
+  }
+
+  function updateVoiceButton() {
+    const btn = $('voice');
+    btn.classList.toggle('live', voice.enabled && !voice.muted);
+    btn.classList.toggle('muted', voice.enabled && voice.muted);
+    btn.textContent = (voice.enabled && voice.muted) ? '🔇' : '🎙️';
+    btn.title = !voice.enabled ? 'Join voice chat (needs mic)'
+      : voice.muted ? 'Mic muted — tap to unmute' : 'Mic live — tap to mute';
+  }
+  function setupVoiceButton(v) {
+    const btn = $('voice');
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      audio.resume();
+      if (!v.enabled) {
+        if (!v.available()) {
+          alert('Voice chat needs a secure connection (HTTPS), or play on the host machine via localhost. See the README to turn on HTTPS.');
+          return;
+        }
+        if (!await v.enable()) { alert("Couldn't access the microphone (permission denied or no mic)."); return; }
+      } else {
+        v.toggleMute();
+      }
+      updateVoiceButton();
+    });
+    updateVoiceButton();
+  }
+
+  window.game = { world, player, sky, remotes, net, voice };
 
   // Swap the menu for the play screen.
   $('menu').classList.add('hidden');
@@ -213,6 +283,7 @@ async function startGame(worldId, demo) {
     // Multiplayer sync.
     if (player.locked) net.sendPos(player.state(), performance.now());
     remotes.update(dt);
+    voice.update();
 
     if (player.selected !== lastSel) { highlightSlot(player.selected); lastSel = player.selected; }
     $('coords').textContent =
