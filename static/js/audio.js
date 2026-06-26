@@ -96,88 +96,123 @@ function env(t0, peak, dur, attack = 0.005) {
   return g;
 }
 
-function playSample(name) {
+// --- Spatial routing --------------------------------------------------------
+// Sounds optionally carry a world position. We attenuate by distance and pan
+// left/right by angle relative to the listener (the local player). A sound with
+// no position (your own actions) plays full and centred.
+let listener = null;   // { x, y, z, rx, rz } — rx,rz = listener's "right" axis
+
+export function setListener(x, y, z, yaw) {
+  listener = { x, y, z, rx: Math.cos(yaw), rz: -Math.sin(yaw) };
+}
+
+// Returns { node, gain } to route a sound through, or null if it's inaudible
+// (too far). `node` is a stereo panner (spatial) or sfxGain (centred).
+function dest(pos, maxDist) {
+  if (!pos || !listener) return { node: sfxGain, gain: 1 };
+  const dx = pos.x - listener.x;
+  const dy = (pos.y ?? listener.y) - listener.y;
+  const dz = pos.z - listener.z;
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (dist >= maxDist) return null;
+  const gain = Math.pow(1 - dist / maxDist, 1.6);
+  const horiz = Math.hypot(dx, dz) || 1;
+  const pan = Math.max(-1, Math.min(1, (dx * listener.rx + dz * listener.rz) / horiz));
+  const panner = ctx.createStereoPanner();
+  panner.pan.value = pan * 0.85;
+  panner.connect(sfxGain);
+  return { node: panner, gain };
+}
+
+function playSample(name, d) {
   const src = ctx.createBufferSource();
   src.buffer = samples[name];
-  src.connect(sfxGain);
+  const g = ctx.createGain();
+  g.gain.value = d.gain;
+  src.connect(g); g.connect(d.node);
   src.start();
 }
 
 // --- Sound effects ----------------------------------------------------------
-export function playBreak() {
+// Every effect takes an optional world position `pos`; pass it for other
+// players' actions so they're heard in space, omit it for your own.
+export function playBreak(pos) {
   if (!ctx) return;
-  if (samples.break) return playSample('break');
+  const d = dest(pos, 30); if (!d) return;
+  if (samples.break) return playSample('break', d);
   const t0 = ctx.currentTime;
-  // crunchy noise sweep...
   const src = noiseSource();
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.setValueAtTime(2200, t0);
   lp.frequency.exponentialRampToValueAtTime(350, t0 + 0.18);
-  const ng = env(t0, 0.5, 0.2);
-  src.connect(lp); lp.connect(ng); ng.connect(sfxGain);
+  const ng = env(t0, 0.5 * d.gain, 0.2);
+  src.connect(lp); lp.connect(ng); ng.connect(d.node);
   src.start(t0); src.stop(t0 + 0.22);
-  // ...plus a low thunk for weight.
-  const osc = ctx.createOscillator();
+  const osc = ctx.createOscillator();        // low thunk for weight
   osc.type = 'triangle';
   osc.frequency.setValueAtTime(150, t0);
   osc.frequency.exponentialRampToValueAtTime(70, t0 + 0.12);
-  const og = env(t0, 0.4, 0.15);
-  osc.connect(og); og.connect(sfxGain);
+  const og = env(t0, 0.4 * d.gain, 0.15);
+  osc.connect(og); og.connect(d.node);
   osc.start(t0); osc.stop(t0 + 0.17);
 }
 
-export function playPlace() {
+export function playPlace(pos) {
   if (!ctx) return;
-  if (samples.place) return playSample('place');
+  const d = dest(pos, 30); if (!d) return;
+  if (samples.place) return playSample('place', d);
   const t0 = ctx.currentTime;
   const osc = ctx.createOscillator();
   osc.type = 'triangle';
   osc.frequency.setValueAtTime(240, t0);
   osc.frequency.exponentialRampToValueAtTime(120, t0 + 0.09);
-  const g = env(t0, 0.45, 0.12);
-  osc.connect(g); g.connect(sfxGain);
+  const g = env(t0, 0.45 * d.gain, 0.12);
+  osc.connect(g); g.connect(d.node);
   osc.start(t0); osc.stop(t0 + 0.14);
 }
 
 // Spark / fuse-light tick when igniting TNT.
-export function playIgnite() {
+export function playIgnite(pos) {
   if (!ctx) return;
+  const d = dest(pos, 24); if (!d) return;
   const t0 = ctx.currentTime;
   const src = noiseSource();
   const hp = ctx.createBiquadFilter();
   hp.type = 'highpass'; hp.frequency.value = 2200;
-  const g = env(t0, 0.25, 0.18);
-  src.connect(hp); hp.connect(g); g.connect(sfxGain);
+  const g = env(t0, 0.25 * d.gain, 0.18);
+  src.connect(hp); hp.connect(g); g.connect(d.node);
   src.start(t0); src.stop(t0 + 0.2);
 }
 
-// Big boom for TNT.
-export function playExplosion() {
+// Big boom for TNT (carries further than other effects).
+export function playExplosion(pos) {
   if (!ctx) return;
-  if (samples.explode) return playSample('explode');
+  const d = dest(pos, 50); if (!d) return;
+  if (samples.explode) return playSample('explode', d);
   const t0 = ctx.currentTime;
   const src = noiseSource();
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
   lp.frequency.setValueAtTime(900, t0);
   lp.frequency.exponentialRampToValueAtTime(110, t0 + 0.5);
-  const ng = env(t0, 0.95, 0.6);
-  src.connect(lp); lp.connect(ng); ng.connect(sfxGain);
+  const ng = env(t0, 0.95 * d.gain, 0.6);
+  src.connect(lp); lp.connect(ng); ng.connect(d.node);
   src.start(t0); src.stop(t0 + 0.65);
   const o = ctx.createOscillator();          // low rumble
   o.type = 'sine';
   o.frequency.setValueAtTime(90, t0);
   o.frequency.exponentialRampToValueAtTime(38, t0 + 0.5);
-  const og = env(t0, 0.7, 0.55);
-  o.connect(og); og.connect(sfxGain);
+  const og = env(t0, 0.7 * d.gain, 0.55);
+  o.connect(og); og.connect(d.node);
   o.start(t0); o.stop(t0 + 0.6);
 }
 
 let stepSalt = 7;
-export function playStep() {
+export function playStep(pos) {
   if (!ctx) return;
-  if (samples.step) return playSample('step');
+  const d = dest(pos, 18); if (!d) return;
+  if (samples.step) return playSample('step', d);
   stepSalt = (stepSalt * 1103515245 + 12345) & 0x7fffffff;
   const jitter = stepSalt / 0x7fffffff;
   const t0 = ctx.currentTime;
@@ -186,8 +221,8 @@ export function playStep() {
   bp.type = 'bandpass';
   bp.frequency.value = 320 + jitter * 240;
   bp.Q.value = 0.8;
-  const g = env(t0, 0.12, 0.08);
-  src.connect(bp); bp.connect(g); g.connect(sfxGain);
+  const g = env(t0, 0.12 * d.gain, 0.08);
+  src.connect(bp); bp.connect(g); g.connect(d.node);
   src.start(t0); src.stop(t0 + 0.1);
 }
 

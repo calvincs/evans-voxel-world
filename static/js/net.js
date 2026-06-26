@@ -49,6 +49,7 @@ export class Net {
       case 'pos':     h.onPos && h.onPos(m); break;
       case 'edit':    h.onEdit && h.onEdit(m); break;
       case 'edits':   h.onEdits && h.onEdits(m.edits || []); break;
+      case 'fx':      h.onFx && h.onFx(m); break;
     }
   }
 
@@ -62,4 +63,6 @@ export class Net {
 
   sendEdit(x, y, z, block) { this._send({ type: 'edit', x, y, z, block }); }
   sendEdits(edits) { this._send({ type: 'edits', edits }); }
+  // Ephemeral effect (e.g. an explosion) — relayed, never persisted.
+  sendFx(kind, x, y, z) { this._send({ type: 'fx', kind, x, y, z }); }
 }

@@ -289,13 +289,15 @@ export class World {
     mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
     this.scene.add(mesh);
     this.fuses.push({ x, y, z, key: k, t: fuse, mesh });
-    audio.playIgnite();
+    audio.playIgnite({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
+    if (this.net && this.net.connected) this.net.sendFx('ignite', x, y, z);
   }
 
   _explode(x, y, z) {
-    audio.playExplosion();
+    audio.playExplosion({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
     if (this.onExplosion) this.onExplosion(x, y, z);
     this._spawnParticles(x, y, z);
+    if (this.net && this.net.connected) this.net.sendFx('explode', x, y, z);
 
     const R = Math.ceil(BLAST_RADIUS), R2 = BLAST_RADIUS * BLAST_RADIUS;
     const removed = [];

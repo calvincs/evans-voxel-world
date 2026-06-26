@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { Character } from './engine/character.js';
+import * as audio from './audio.js';
 
 const COLORS = [0xff6b6b, 0x4db6ff, 0xffd24d, 0xb084ff, 0x55d98a, 0xff9f40, 0xff7ad9];
 
@@ -28,7 +29,7 @@ export class RemotePlayers {
       ch,
       cur: new THREE.Vector3(x, y, z),
       tgt: new THREE.Vector3(x, y, z),
-      yaw, tyaw: yaw, pitch: p.pitch || 0,
+      yaw, tyaw: yaw, pitch: p.pitch || 0, stepDist: 0,
     });
   }
 
@@ -62,6 +63,18 @@ export class RemotePlayers {
       const speed = Math.hypot(r.cur.x - prevX, r.cur.z - prevZ) / Math.max(dt, 1e-3);
       r.ch.setTransform(r.cur.x, r.cur.y, r.cur.z, r.yaw);
       r.ch.animate(dt, speed, r.pitch);
+
+      // Spatial footsteps, paced by distance walked (audio.dest attenuates by
+      // range, so far-off players are inaudible).
+      if (speed > 0.8) {
+        r.stepDist += speed * dt;
+        if (r.stepDist > 1.9) {
+          audio.playStep({ x: r.cur.x, y: r.cur.y, z: r.cur.z });
+          r.stepDist = 0;
+        }
+      } else {
+        r.stepDist = 0;
+      }
     }
   }
 }

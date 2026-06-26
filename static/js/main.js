@@ -130,7 +130,12 @@ async function startGame(worldId, demo) {
   const player = new Player(camera, world, scene, canvas, spawn);
   player.mobile = isTouch;
   player.onBreakPlace = () => flashCrosshair();
-  world.onExplosion = () => player.shake(0.9);
+  // Camera shake from an explosion, scaled by how close it was.
+  const feltShake = (x, y, z) => {
+    const d = Math.hypot(player.pos.x - (x + 0.5), player.pos.y - (y + 0.5), player.pos.z - (z + 0.5));
+    if (d < 16) player.shake(0.9 * (1 - d / 16));
+  };
+  world.onExplosion = (x, y, z) => feltShake(x, y, z);
 
   if (isTouch) setupTouchControls(player);
   buildHotbar(atlas.image, player);
@@ -143,8 +148,21 @@ async function startGame(worldId, demo) {
     onJoin: (p) => remotes.add(p),
     onLeave: (id) => remotes.remove(id),
     onPos: (m) => remotes.setPos(m),
-    onEdit: (m) => world.setBlock(m.x, m.y, m.z, m.block, false),
+    onEdit: (m) => {
+      world.setBlock(m.x, m.y, m.z, m.block, false);
+      // Hear other players placing/breaking, in space (0 == AIR == a break).
+      audio[m.block === 0 ? 'playBreak' : 'playPlace']({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
+    },
     onEdits: (edits) => edits.forEach((e) => world.setBlock(e.x, e.y, e.z, e.block, false)),
+    onFx: (m) => {
+      if (m.kind === 'explode') {
+        audio.playExplosion({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
+        world._spawnParticles(m.x, m.y, m.z);
+        feltShake(m.x, m.y, m.z);
+      } else if (m.kind === 'ignite') {
+        audio.playIgnite({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
+      }
+    },
   });
   world.net = net;
   window.game = { world, player, sky, remotes, net };
@@ -188,6 +206,7 @@ async function startGame(worldId, demo) {
   function loop() {
     const dt = clock.getDelta();
     player.update(dt);
+    audio.setListener(player.pos.x, player.pos.y + 1.62, player.pos.z, player.yaw);
     sky.update(dt, player.pos);
     world.update(player.pos.x, player.pos.z, dt, sky.daylight);
 

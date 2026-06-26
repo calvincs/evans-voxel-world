@@ -217,6 +217,9 @@ async def world_ws(ws: WebSocket, wid: str):
                 items = [(e["x"], e["y"], e["z"], e["block"]) for e in msg.get("edits", [])]
                 store.set_blocks(wid, items)
                 await _broadcast(room, ws, {"type": "edits", "edits": msg.get("edits", [])})
+            elif t == "fx":
+                # Ephemeral effect (explosion etc.) — relay only, no persistence.
+                await _broadcast(room, ws, msg)
     except (WebSocketDisconnect, KeyError, TypeError, ValueError):
         pass
     finally:
