@@ -26,7 +26,7 @@ seconds. After that it starts instantly.)
 | `Shift` | run |
 | Left click | break a block |
 | Right click | place a block |
-| `1`–`0` / scroll | choose a block |
+| `1`–`8` / scroll | choose a hotbar block |
 | `E` | inventory (pick any block) |
 | `V` | first / third-person view |
 | `M` | music on/off |

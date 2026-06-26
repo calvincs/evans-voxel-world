@@ -81,11 +81,10 @@ export const isTransparent = (b) => TRANSPARENT.has(b);
 // Solid for physics / collision (everything you can stand on).
 export const isSolid = (b) => b !== AIR && b !== WATER;
 
-// What the player can place. Keys 1..0 pick the first ten; scroll reaches the
-// rest.
+// The hotbar: 8 slots, keys 1..8 (and scroll). Swap any block in via the
+// inventory (E). This array is mutated when you pick a block from there.
 export const HOTBAR = [
-  GRASS, DIRT, STONE, COBBLE, PLANKS, WOOD, LEAVES, SAND, BRICK, GLASS,
-  SNOW, PUMPKIN, GOLD, DIAMOND, WOOL_RED, WOOL_BLUE, GLOWSTONE, TNT, FLINT, FIRESTONE,
+  GRASS, DIRT, STONE, COBBLE, PLANKS, WOOD, GLASS, GLOWSTONE,
 ];
 
 // Everything available in the inventory picker (E).

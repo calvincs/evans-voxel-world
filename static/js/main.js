@@ -190,6 +190,13 @@ async function startGame(worldId, demo) {
   });
   voice.onRoster = (id, inVoice) => { if (inVoice) voiceIds.add(id); else voiceIds.delete(id); renderRoster(); };
   voice.onState = () => { updateVoiceButton(); renderRoster(); };
+  voice.onPeerState = (id, state) => {
+    const name = (roster.get(id) || {}).name || `Player ${id}`;
+    if (state === 'connected') toast(`🔊 Voice connected to ${name}`, 2500);
+    else if (state === 'failed') {
+      toast(`⚠️ Voice couldn't reach ${name}. Your Wi-Fi may block device-to-device — try turning off AP/guest isolation on the router.`, 8000);
+    }
+  };
   setupVoiceButton(voice);
 
   // True while a text field (the name inputs on the menu) is focused, so game
@@ -450,12 +457,10 @@ function buildHotbar(atlasCanvas, player) {
     drawBlockIcon(icon, atlasCanvas, block, 36);
     slot.appendChild(icon);
 
-    if (i < 10) {
-      const key = document.createElement('span');
-      key.className = 'key';
-      key.textContent = (i + 1) % 10;
-      slot.appendChild(key);
-    }
+    const key = document.createElement('span');
+    key.className = 'key';
+    key.textContent = i + 1;          // 1..8
+    slot.appendChild(key);
     slot.addEventListener('click', (e) => { e.stopPropagation(); player.selectBlock(i); });
     bar.appendChild(slot);
   });

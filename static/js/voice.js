@@ -10,7 +10,12 @@
 
 import * as audio from './audio.js';
 
-const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+};
 
 export class Voice {
   // net: the Net instance; myId: () => number; peerPos: (id) => {x,y,z}|null
@@ -28,6 +33,7 @@ export class Voice {
     this.selfSpeaking = false;
     this.onState = null;         // UI callback
     this.onRoster = null;        // (peerId, inVoice) for the who's-online list
+    this.onPeerState = null;     // (peerId, connectionState) for diagnostics
   }
 
   // Enable the mic track only when we should actually be sending audio.
@@ -127,7 +133,10 @@ export class Voice {
     };
     pc.ontrack = (e) => { if (!entry.sink) entry.sink = audio.voiceSink(e.streams[0]); };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this._removePeer(peerId);
+      const st = pc.connectionState;
+      if (this.onPeerState) this.onPeerState(peerId, st);
+      // 'disconnected' can recover, so only tear down on a hard failure.
+      if (st === 'failed' || st === 'closed') this._removePeer(peerId);
     };
     if (initiator) {
       pc.createOffer()
@@ -183,9 +192,7 @@ export class Voice {
     if (!this.enabled) return;
     for (const [id, entry] of this.peers) {
       if (!entry.sink) { this.speaking.delete(id); continue; }
-      const p = this.peerPos(id);
-      if (p) audio.setVoiceProximity(entry.sink, p);
-      else entry.sink.gain.gain.value = 0;
+      audio.setVoiceProximity(entry.sink, this.peerPos(id));   // audible even if pos unknown
       // Noise gate: real speech is ~0.05–0.3 RMS, idle/quiet sits near 0.
       if (audio.voiceLevel(entry.sink) > 0.02) this.speaking.add(id);
       else this.speaking.delete(id);

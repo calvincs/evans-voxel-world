@@ -87,14 +87,17 @@ export function voiceLevel(handle) {
   return Math.sqrt(sum / handle.buf.length);
 }
 
-// Update a voice sink's volume/pan from the speaker's world position.
-export function setVoiceProximity(handle, pos, maxDist = 24) {
-  if (!handle || !listener) return;
+// Update a voice sink's volume/pan from the speaker's world position. There's
+// a volume floor so people in voice together are never fully silent, even far
+// apart or before positions are known — it just gets louder up close.
+export function setVoiceProximity(handle, pos, maxDist = 40) {
+  if (!handle) return;
+  if (!listener || !pos) { handle.gain.gain.value = 0.75; handle.panner.pan.value = 0; return; }
   const dx = pos.x - listener.x;
   const dy = (pos.y ?? listener.y) - listener.y;
   const dz = pos.z - listener.z;
   const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  const g = Math.max(0, Math.min(1, (maxDist - dist) / (maxDist - 2)));  // full ≤2m, 0 at maxDist
+  const g = Math.max(0.35, Math.min(1, (maxDist - dist) / (maxDist - 2)));
   handle.gain.gain.value = g;
   const horiz = Math.hypot(dx, dz) || 1;
   handle.panner.pan.value = Math.max(-1, Math.min(1, (dx * listener.rx + dz * listener.rz) / horiz)) * 0.7;

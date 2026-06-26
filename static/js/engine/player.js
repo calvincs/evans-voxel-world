@@ -103,7 +103,7 @@ export class Player {
       this.keys.add(e.code);
       if (e.code.startsWith('Digit')) {
         const n = parseInt(e.code.slice(5), 10);
-        this.selectBlock(n === 0 ? 9 : n - 1);
+        if (n >= 1 && n <= HOTBAR.length) this.selectBlock(n - 1);
       }
       if (e.code === 'KeyV') this.toggleView();
     });
