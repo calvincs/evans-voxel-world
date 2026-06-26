@@ -34,9 +34,62 @@ const jpost = (url, body) => fetch(url, {
   body: JSON.stringify(body || {}),
 }).then((r) => r.json());
 
+// --- Connection monitor ------------------------------------------------------
+// Polls the server's health. If it goes away we freeze the game and show a
+// blocking "Disconnected" screen (so no further unsaved edits happen); only
+// once the server answers again can you go back to the world menu.
+let offline = false;
+let healthFails = 0;
+let healthTimer = null;
+
+async function pingHealth() {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    const res = await fetch('/api/health', { signal: ctrl.signal, cache: 'no-store' });
+    clearTimeout(t);
+    return res.ok;
+  } catch (_) { return false; }
+}
+function scheduleHealth(delay) { clearTimeout(healthTimer); healthTimer = setTimeout(runHealthCheck, delay); }
+async function runHealthCheck() {
+  const ok = await pingHealth();
+  if (offline) {                       // overlay is up; track when we can return
+    setReconnectUI(ok);
+    scheduleHealth(2000);
+    return;
+  }
+  if (ok) healthFails = 0;
+  else if (++healthFails >= 2) markOffline();   // two misses = disconnected
+  scheduleHealth(healthFails > 0 ? 1500 : 5000);  // recheck quickly after a miss
+}
+function startConnectionMonitor() {
+  const back = $('disc-back');
+  if (back) back.onclick = () => location.reload();   // server's up -> reload to the menu
+  runHealthCheck();
+}
+function connectionCheckNow() { scheduleHealth(0); }   // e.g. when the WebSocket drops
+function setReconnectUI(ok) {
+  const s = $('disc-status'), back = $('disc-back');
+  if (s) {
+    s.textContent = ok ? '✓ Reconnected — your work is safe.' : 'Still disconnected. Trying to reconnect…';
+    s.classList.toggle('ok', ok);
+  }
+  if (back) back.disabled = !ok;
+}
+function markOffline() {
+  if (offline) return;
+  offline = true;
+  healthFails = 0;
+  if (document.pointerLockElement) document.exitPointerLock();
+  setReconnectUI(false);
+  $('disconnected').classList.remove('hidden');
+}
+
 let assets = { textures: [], audio: {} };   // which optional override files exist
 
 async function main() {
+  startConnectionMonitor();
   try { assets = await (await fetch('/api/assets')).json(); } catch (_) {}
   audio.prefetchOverrides(assets.audio);
 
@@ -184,6 +237,7 @@ async function startGame(worldId, demo) {
     onVoice: (m) => voice.handle(m),
   });
   world.net = net;
+  net.onDown = () => connectionCheckNow();   // socket dropped -> check the server now
 
   // Proximity voice chat (WebRTC). Peer audio is positioned by where that
   // player is, via remotes' interpolated positions.
@@ -411,6 +465,8 @@ async function startGame(worldId, demo) {
   const clock = new THREE.Clock();
   let lastSel = -1;
   function loop() {
+    requestAnimationFrame(loop);
+    if (offline) { renderer.render(scene, camera); return; }   // frozen while disconnected
     const dt = clock.getDelta();
     player.update(dt);
     audio.setListener(player.pos.x, player.pos.y + 1.62, player.pos.z, player.yaw);
@@ -431,7 +487,6 @@ async function startGame(worldId, demo) {
       `x ${player.pos.x.toFixed(0)}  y ${player.pos.y.toFixed(0)}  z ${player.pos.z.toFixed(0)}  ·  ${sky.clock()}`;
 
     renderer.render(scene, camera);
-    requestAnimationFrame(loop);
   }
   loop();
 }

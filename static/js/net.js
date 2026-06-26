@@ -8,6 +8,7 @@ export class Net {
     this.name = name;
     this.connected = false;
     this.myId = null;
+    this.onDown = null;          // called when the socket drops (fast disconnect signal)
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     this.url = `${proto}://${location.host}/api/worlds/${worldId}/ws`;
     this._posT = 0;
@@ -27,7 +28,12 @@ export class Net {
       let m; try { m = JSON.parse(e.data); } catch (_) { return; }
       this._dispatch(m);
     };
-    this.ws.onclose = () => { this.connected = false; this._scheduleRetry(); };
+    this.ws.onclose = () => {
+      const was = this.connected;
+      this.connected = false;
+      this._scheduleRetry();
+      if (was && this.onDown) this.onDown();   // trigger a fast health check
+    };
     this.ws.onerror = () => { try { this.ws.close(); } catch (_) {} };
   }
 

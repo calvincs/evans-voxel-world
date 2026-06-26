@@ -149,6 +149,36 @@ html, body {
 #voice.muted { background: rgba(176, 58, 58, 0.7); }
 #voice.unavailable { opacity: 0.5; }                    /* mic not available (no HTTPS) */
 
+/* --- Disconnected screen -------------------------------------------------- */
+#disconnected {
+  position: fixed;
+  inset: 0;
+  z-index: 20;                 /* above everything, incl. menu + pause */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 30, 0.82);
+  backdrop-filter: blur(4px);
+}
+#disconnected.hidden { display: none; }
+#disconnected .panel { border-color: #c2492f; max-width: 420px; }
+#disconnected h1 { color: #c2492f; }
+#disconnected p { color: #444; line-height: 1.5; margin-bottom: 10px; }
+.disc-status {
+  font-weight: bold;
+  color: #b07a1f !important;
+}
+.disc-status.ok { color: #2f9f3c !important; }
+#disc-back {
+  margin-top: 8px;
+  font: inherit; font-size: 16px; font-weight: bold;
+  padding: 10px 26px; border: none; border-radius: 10px;
+  background: #2f9f3c; color: #fff; cursor: pointer;
+  box-shadow: 0 4px 0 #237a2d;
+}
+#disc-back:hover:not(:disabled) { background: #36b545; }
+#disc-back:disabled { background: #9aa0a8; box-shadow: 0 4px 0 #7c828a; cursor: default; opacity: 0.8; }
+
 /* --- Toast notifications -------------------------------------------------- */
 #toast {
   position: fixed;

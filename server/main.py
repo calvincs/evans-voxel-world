@@ -244,7 +244,13 @@ async def world_ws(ws: WebSocket, wid: str):
             _rooms.pop(wid, None)
 
 
-# --- Assets manifest ---------------------------------------------------------
+# --- Health / assets ---------------------------------------------------------
+@app.get("/api/health")
+def health():
+    """Cheap liveness check the client polls to detect disconnection."""
+    return {"ok": True}
+
+
 @app.get("/api/assets")
 def assets():
     """Which optional override files actually exist, so the client only requests
