@@ -23,15 +23,17 @@ const EXTS = ['mp3', 'ogg', 'wav'];
 const pendingBuffers = {};   // name -> ArrayBuffer fetched before ctx exists
 const samples = {};          // name -> decoded AudioBuffer
 
-// Fetch any override files up front (no AudioContext needed to download).
-export async function prefetchOverrides() {
+// Fetch override files that the server says exist (no AudioContext needed to
+// download, and no 404s for the built-in synthesized fallbacks).
+// `available` maps name -> extension, e.g. { music: 'ogg', break: 'ogg' }.
+export async function prefetchOverrides(available = {}) {
   await Promise.all(OVERRIDE_NAMES.map(async (name) => {
-    for (const ext of EXTS) {
-      try {
-        const res = await fetch(`/static/audio/${name}.${ext}`);
-        if (res.ok) { pendingBuffers[name] = await res.arrayBuffer(); return; }
-      } catch (_) { /* keep trying */ }
-    }
+    const ext = available[name];
+    if (!ext) return;
+    try {
+      const res = await fetch(`/static/audio/${name}.${ext}`);
+      if (res.ok) pendingBuffers[name] = await res.arrayBuffer();
+    } catch (_) { /* fall back to synthesized */ }
   }));
 }
 

@@ -300,9 +300,11 @@ const TILE_PAINTERS = {
   },
 };
 
-// Build the atlas texture. Prefers /static/textures/<name>.png if present,
-// otherwise paints the procedural tile. Returns a Promise<THREE.Texture>.
-export async function buildAtlasTexture() {
+// Build the atlas texture. Uses /static/textures/<name>.png when present (only
+// the names in `available`, so we never request a missing file), otherwise
+// paints the procedural tile. Returns a Promise<THREE.Texture>.
+export async function buildAtlasTexture(available = []) {
+  const overrides = new Set(available);
   const size = ATLAS_COLS * TILE_PX;
   const atlas = document.createElement('canvas');
   atlas.width = size; atlas.height = size;
@@ -318,7 +320,7 @@ export async function buildAtlasTexture() {
   for (const [name, slot] of Object.entries(TILE)) {
     const col = slot % ATLAS_COLS, row = Math.floor(slot / ATLAS_COLS);
     const ox = col * TILE_PX, oy = row * TILE_PX;
-    const img = await loadOverride(name);
+    const img = overrides.has(name) ? await loadOverride(name) : null;
     if (img) {
       actx.imageSmoothingEnabled = false;
       actx.drawImage(img, ox, oy, TILE_PX, TILE_PX);

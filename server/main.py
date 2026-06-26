@@ -244,6 +244,26 @@ async def world_ws(ws: WebSocket, wid: str):
             _rooms.pop(wid, None)
 
 
+# --- Assets manifest ---------------------------------------------------------
+@app.get("/api/assets")
+def assets():
+    """Which optional override files actually exist, so the client only requests
+    those (instead of probing and logging 404s for the built-in fallbacks)."""
+    textures = []
+    tex_dir = os.path.join(STATIC_DIR, "textures")
+    if os.path.isdir(tex_dir):
+        textures = [f[:-4] for f in os.listdir(tex_dir) if f.lower().endswith(".png")]
+    audio = {}
+    aud_dir = os.path.join(STATIC_DIR, "audio")
+    if os.path.isdir(aud_dir):
+        for f in os.listdir(aud_dir):
+            base, ext = os.path.splitext(f)
+            ext = ext.lower().lstrip(".")
+            if ext in ("mp3", "ogg", "wav") and base not in audio:
+                audio[base] = ext
+    return {"textures": textures, "audio": audio}
+
+
 # --- Static front-end --------------------------------------------------------
 @app.get("/")
 def index():

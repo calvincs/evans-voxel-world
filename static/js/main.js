@@ -34,8 +34,11 @@ const jpost = (url, body) => fetch(url, {
   body: JSON.stringify(body || {}),
 }).then((r) => r.json());
 
+let assets = { textures: [], audio: {} };   // which optional override files exist
+
 async function main() {
-  audio.prefetchOverrides();
+  try { assets = await (await fetch('/api/assets')).json(); } catch (_) {}
+  audio.prefetchOverrides(assets.audio);
 
   // Demo / kiosk: skip the menu, jump into a world. ?demo&w=<id> targets a
   // specific world; otherwise the most recent (or a fresh "Demo").
@@ -125,7 +128,7 @@ async function startGame(worldId, demo) {
   const canvas = $('game');
   const { renderer, scene, camera } = createRenderer(canvas);
   const sky = new Sky(scene);
-  const atlas = await buildAtlasTexture();
+  const atlas = await buildAtlasTexture(assets.textures);
 
   const world = new World(scene, atlas, worldId);
   const spawn = cfg.player || cfg.spawn;
