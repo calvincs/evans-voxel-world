@@ -231,40 +231,61 @@ async function startGame(worldId, demo) {
 
   function updateVoiceButton() {
     const btn = $('voice'), talk = $('talk');
+    const avail = voice.available();
     btn.classList.toggle('joined', voice.enabled && !voice.transmitting);
     btn.classList.toggle('live', voice.enabled && voice.transmitting);
-    btn.title = voice.enabled
-      ? 'In voice — tap to leave (hold T or the Talk button to speak)'
-      : 'Join voice chat (needs mic)';
-    talk.classList.toggle('hidden', !voice.enabled);
+    btn.classList.toggle('unavailable', !avail && !voice.enabled);
+    btn.title = (!avail && !voice.enabled)
+      ? 'Voice needs HTTPS — you appear to be on an insecure connection'
+      : voice.enabled ? 'In voice — tap to leave · hold T to talk'
+        : 'Join voice chat — your browser will ask for the mic';
+    // Always show the Talk button once in voice; show a faint hint otherwise.
+    talk.classList.toggle('hidden', false);
+    talk.textContent = voice.enabled ? '🗣️ Talk' : '🎙️ Hold T to talk';
+    talk.classList.toggle('ghost', !voice.enabled);
     talk.classList.toggle('talking', voice.transmitting);
   }
+
+  // Join voice on demand (asks for the mic). Returns true if we're in voice.
+  let talkHeld = false;
+  async function ensureVoice() {
+    if (voice.enabled) return true;
+    audio.resume();
+    if (!voice.available()) {
+      toast('🎙️ Voice needs a secure (HTTPS) connection. Open the game at https://… — see the README.', 5500);
+      return false;
+    }
+    const ok = await voice.enable();
+    if (ok) toast("🎙️ You're in voice — hold T to talk. Everyone else must join (🎙️) too.", 4500);
+    else toast('🎙️ Microphone blocked — allow mic access in your browser, then try again.', 5000);
+    updateVoiceButton();
+    return ok;
+  }
+  async function beginTalk() {
+    if (talkHeld) return;
+    talkHeld = true;
+    if (voice.enabled) { voice.startTalk(); return; }
+    const ok = await ensureVoice();   // first T press auto-joins + prompts for mic
+    if (ok && talkHeld) voice.startTalk(); else talkHeld = false;
+  }
+  function endTalk() { talkHeld = false; voice.stopTalk(); }
+
   function setupVoiceButton(v) {
     const btn = $('voice'), talk = $('talk');
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      audio.resume();
-      if (!v.enabled) {
-        if (!v.available()) {
-          alert('Voice chat needs a secure connection (HTTPS), or play on the host machine via localhost. See the README to turn on HTTPS.');
-          return;
-        }
-        if (!await v.enable()) { alert("Couldn't access the microphone (permission denied or no mic)."); return; }
-      } else {
-        v.leave();
-      }
+      if (v.enabled) { v.leave(); toast('🎙️ Left voice.', 1500); }
+      else await ensureVoice();
       updateVoiceButton();
     });
-    // Hold-to-talk button (pointer events cover both touch and mouse).
-    const down = (e) => { e.preventDefault(); e.stopPropagation(); v.startTalk(); };
-    const up = (e) => { e.preventDefault(); v.stopTalk(); };
+    const down = (e) => { e.preventDefault(); e.stopPropagation(); beginTalk(); };
+    const up = (e) => { e.preventDefault(); endTalk(); };
     talk.addEventListener('pointerdown', down);
     talk.addEventListener('pointerup', up);
     talk.addEventListener('pointercancel', up);
     talk.addEventListener('pointerleave', up);
-    // Keyboard push-to-talk: hold T.
-    document.addEventListener('keydown', (e) => { if (e.code === 'KeyT' && !e.repeat && v.enabled && !typing()) v.startTalk(); });
-    document.addEventListener('keyup', (e) => { if (e.code === 'KeyT') v.stopTalk(); });
+    document.addEventListener('keydown', (e) => { if (e.code === 'KeyT' && !e.repeat && !typing()) beginTalk(); });
+    document.addEventListener('keyup', (e) => { if (e.code === 'KeyT') endTalk(); });
     updateVoiceButton();
   }
 
@@ -450,6 +471,16 @@ function updateHotbarSlot(i, atlasCanvas) {
 function highlightSlot(i) {
   document.querySelectorAll('#hotbar .slot').forEach((s, n) =>
     s.classList.toggle('active', n === i));
+}
+
+let toastTimer = null;
+function toast(msg, ms = 3000) {
+  const el = $('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
 
 let flashTimer = null;

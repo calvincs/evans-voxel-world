@@ -147,6 +147,26 @@ html, body {
 #voice.joined { background: rgba(47, 110, 214, 0.7); }  /* in voice, not talking */
 #voice.live { background: rgba(47, 159, 60, 0.85); }    /* transmitting */
 #voice.muted { background: rgba(176, 58, 58, 0.7); }
+#voice.unavailable { opacity: 0.5; }                    /* mic not available (no HTTPS) */
+
+/* --- Toast notifications -------------------------------------------------- */
+#toast {
+  position: fixed;
+  top: 58px; left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  z-index: 12;
+  max-width: 80vw;
+  padding: 9px 16px;
+  border-radius: 12px;
+  background: rgba(20, 30, 50, 0.92);
+  color: #fff;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 /* Push-to-talk button (hold). */
 #talk {
@@ -166,6 +186,7 @@ html, body {
   touch-action: none;
 }
 #talk.hidden { display: none; }
+#talk.ghost { opacity: 0.5; font-weight: normal; font-size: 13px; }
 #talk.talking {
   background: rgba(47, 159, 60, 0.9);
   border-color: #8be79a;
