@@ -67,7 +67,24 @@ export function voiceSink(stream) {
   const gain = ctx.createGain(); gain.gain.value = 0;
   const panner = ctx.createStereoPanner();
   src.connect(gain); gain.connect(panner); panner.connect(voiceGain);
-  return { src, gain, panner, el };
+  // Tap the raw stream to detect when this peer is speaking (distance-independent).
+  const analyser = ctx.createAnalyser(); analyser.fftSize = 256;
+  src.connect(analyser);
+  return { src, gain, panner, el, analyser, buf: new Uint8Array(analyser.fftSize) };
+}
+
+export function audioCtxState() { return ctx ? ctx.state : 'none'; }
+
+// RMS level (0..1) of a voice sink — used to tell if that peer is talking.
+export function voiceLevel(handle) {
+  if (!handle || !handle.analyser) return 0;
+  handle.analyser.getByteTimeDomainData(handle.buf);
+  let sum = 0;
+  for (let i = 0; i < handle.buf.length; i++) {
+    const v = (handle.buf[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / handle.buf.length);
 }
 
 // Update a voice sink's volume/pan from the speaker's world position.

@@ -43,6 +43,11 @@ export class RemotePlayers {
     r.pitch = m.pitch || 0;
   }
 
+  setSpeaking(id, on) {
+    const r = this.players.get(id);
+    if (r) r.ch.setSpeaking(on);
+  }
+
   remove(id) {
     const r = this.players.get(id);
     if (r) { r.ch.dispose(); this.players.delete(id); }

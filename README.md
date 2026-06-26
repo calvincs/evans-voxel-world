@@ -100,10 +100,11 @@ brightness/reach are `GLOW_LIGHT_POWER` / `GLOW_RANGE` in the same file.
 
 Several people on the same Wi-Fi can share a world:
 
-1. **One person hosts** — run `./run.sh`. It listens on all interfaces
-   (`0.0.0.0`), so others can reach it.
+1. **One person hosts** — run `./run.sh`. It serves **HTTPS** on all interfaces
+   (`0.0.0.0`), generating a self-signed cert the first time.
 2. Find the host's local IP (`hostname -I` on Linux, e.g. `192.168.1.14`).
-3. Everyone else opens **`http://<host-ip>:8765`** in their browser, types their
+3. Everyone else opens **`https://<host-ip>:8765`** in their browser (accept the
+   one-time "not secure" warning — it's the host's own cert), types their
    **name** in the menu, and picks the **same world**. You'll see each other's
    characters (with name tags) move around, a **who's-online list** in the
    corner, and blocks placed/broken by anyone — with **spatial sound** (you hear
@@ -116,24 +117,20 @@ the host — that's a network setup step outside the game.
 The server relays positions, edits and effect events over a WebSocket per world
 (`/api/worlds/<id>/ws`); see `server/main.py` and `static/js/net.js`.
 
-### Voice chat (proximity)
+### Voice chat (proximity, push-to-talk)
 
-Click the **🎙️ button** (top-right) to talk to nearby players — voice gets
-louder as you get closer and fades with distance (peer-to-peer WebRTC; the
-WebSocket only carries the setup handshake). Click again to mute.
+Click the **🎙️ button** (top-right) to join voice, then **hold `T`** (or hold
+the on-screen **🗣️ Talk** button) to speak — push-to-talk, so no hot mic.
+Voices get louder as players get closer and fade with distance (peer-to-peer
+WebRTC; the WebSocket only carries the setup handshake). Whoever's talking is
+highlighted green in the who's-online list and shows a speech bubble above their
+character. Click 🎙️ again to leave voice.
 
-Browsers only allow microphone access over a **secure connection**, so for
-players on other devices you need HTTPS:
-
-```bash
-./tools/make_cert.sh                                   # one time: makes a self-signed cert
-EVANS_SSL_CERT=certs/cert.pem EVANS_SSL_KEY=certs/key.pem ./run.sh
-```
-
-Then open **`https://<host-ip>:8765`** on each device and accept the one-time
-"not secure" warning (it's your own certificate). On the host machine itself,
-`http://localhost:8765` already counts as secure, so voice works there without a
-cert.
+Mic access needs HTTPS, which is **on by default** — a self-signed cert is made
+automatically on first run. Each device just accepts the one-time "not secure"
+warning. To run plain HTTP instead (no voice for other devices), use
+`EVANS_HTTP=1 ./run.sh`. To use your own cert, set `EVANS_SSL_CERT` /
+`EVANS_SSL_KEY`.
 
 > Running a **second** server instance? Point it at a different data folder with
 > `EVANS_WORLDS_DIR=/some/dir ./run.sh` so the two don't fight over the same

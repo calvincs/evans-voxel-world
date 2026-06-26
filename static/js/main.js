@@ -147,6 +147,7 @@ async function startGame(worldId, demo) {
   const myName = playerName();
   const roster = new Map();       // id -> { name }
   const voiceIds = new Set();     // ids currently in voice
+  const rosterEls = new Map();    // id -> roster row element (for speaking highlight)
   const net = new Net(worldId, myName, {
     onWelcome: (id, players) => { players.forEach((p) => { remotes.add(p); roster.set(p.id, { name: p.name }); }); renderRoster(); },
     onJoin: (p) => { remotes.add(p); roster.set(p.id, { name: p.name }); renderRoster(); },
@@ -191,9 +192,10 @@ async function startGame(worldId, demo) {
   function renderRoster() {
     const el = $('roster');
     el.innerHTML = '';
+    rosterEls.clear();
     if (roster.size === 0) return;            // solo: keep it clean
     const rows = [{ id: net.myId, name: `${myName} (you)`, color: SELF_COLOR,
-                    mic: voice.enabled && !voice.muted, me: true }];
+                    mic: voice.enabled, me: true }];
     for (const [id, info] of roster) rows.push({ id, name: info.name, color: playerColor(id), mic: voiceIds.has(id) });
     for (const r of rows) {
       const row = document.createElement('div');
@@ -205,19 +207,30 @@ async function startGame(worldId, demo) {
       const nm = document.createElement('span'); nm.textContent = r.name; row.appendChild(nm);
       if (r.mic) { const mic = document.createElement('span'); mic.className = 'mic'; mic.textContent = '🎙️'; row.appendChild(mic); }
       el.appendChild(row);
+      rosterEls.set(r.id, row);
     }
   }
 
+  // Toggle the green "speaking" highlight on roster rows each frame.
+  function updateRosterSpeaking() {
+    rosterEls.forEach((row, id) => {
+      const sp = id === net.myId ? voice.selfSpeaking : voice.isSpeaking(id);
+      row.classList.toggle('speaking', !!sp);
+    });
+  }
+
   function updateVoiceButton() {
-    const btn = $('voice');
-    btn.classList.toggle('live', voice.enabled && !voice.muted);
-    btn.classList.toggle('muted', voice.enabled && voice.muted);
-    btn.textContent = (voice.enabled && voice.muted) ? '🔇' : '🎙️';
-    btn.title = !voice.enabled ? 'Join voice chat (needs mic)'
-      : voice.muted ? 'Mic muted — tap to unmute' : 'Mic live — tap to mute';
+    const btn = $('voice'), talk = $('talk');
+    btn.classList.toggle('joined', voice.enabled && !voice.transmitting);
+    btn.classList.toggle('live', voice.enabled && voice.transmitting);
+    btn.title = voice.enabled
+      ? 'In voice — tap to leave (hold T or the Talk button to speak)'
+      : 'Join voice chat (needs mic)';
+    talk.classList.toggle('hidden', !voice.enabled);
+    talk.classList.toggle('talking', voice.transmitting);
   }
   function setupVoiceButton(v) {
-    const btn = $('voice');
+    const btn = $('voice'), talk = $('talk');
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       audio.resume();
@@ -228,10 +241,20 @@ async function startGame(worldId, demo) {
         }
         if (!await v.enable()) { alert("Couldn't access the microphone (permission denied or no mic)."); return; }
       } else {
-        v.toggleMute();
+        v.leave();
       }
       updateVoiceButton();
     });
+    // Hold-to-talk button (pointer events cover both touch and mouse).
+    const down = (e) => { e.preventDefault(); e.stopPropagation(); v.startTalk(); };
+    const up = (e) => { e.preventDefault(); v.stopTalk(); };
+    talk.addEventListener('pointerdown', down);
+    talk.addEventListener('pointerup', up);
+    talk.addEventListener('pointercancel', up);
+    talk.addEventListener('pointerleave', up);
+    // Keyboard push-to-talk: hold T.
+    document.addEventListener('keydown', (e) => { if (e.code === 'KeyT' && !e.repeat && v.enabled) v.startTalk(); });
+    document.addEventListener('keyup', (e) => { if (e.code === 'KeyT') v.stopTalk(); });
     updateVoiceButton();
   }
 
@@ -284,6 +307,9 @@ async function startGame(worldId, demo) {
     if (player.locked) net.sendPos(player.state(), performance.now());
     remotes.update(dt);
     voice.update();
+    // Reflect who's talking on characters + roster.
+    remotes.players.forEach((_, id) => remotes.setSpeaking(id, voice.isSpeaking(id)));
+    updateRosterSpeaking();
 
     if (player.selected !== lastSel) { highlightSlot(player.selected); lastSel = player.selected; }
     $('coords').textContent =

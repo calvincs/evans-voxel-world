@@ -22,8 +22,36 @@ export class Voice {
     this.localStream = null;
     this.enabled = false;
     this.muted = false;
+    this.pushToTalk = true;      // default: hold a key/button to transmit
+    this.transmitting = false;   // PTT key/button currently held
+    this.speaking = new Set();   // peer ids whose audio is currently active
+    this.selfSpeaking = false;
     this.onState = null;         // UI callback
     this.onRoster = null;        // (peerId, inVoice) for the who's-online list
+  }
+
+  // Enable the mic track only when we should actually be sending audio.
+  _applyMicState() {
+    if (!this.localStream) return;
+    const on = this.pushToTalk ? this.transmitting : !this.muted;
+    this.localStream.getAudioTracks().forEach((t) => { t.enabled = on; });
+  }
+
+  startTalk() {
+    if (!this.enabled || this.transmitting) return;
+    this.transmitting = true; this._applyMicState();
+    if (this.onState) this.onState();
+  }
+
+  stopTalk() {
+    if (!this.transmitting) return;
+    this.transmitting = false; this._applyMicState();
+    if (this.onState) this.onState();
+  }
+
+  setPushToTalk(on) {
+    this.pushToTalk = on; this.transmitting = false; this._applyMicState();
+    if (this.onState) this.onState();
   }
 
   available() {
@@ -40,6 +68,7 @@ export class Voice {
       return false;                          // permission denied / no mic
     }
     this.enabled = true;
+    this._applyMicState();                   // start silent in push-to-talk mode
     this.net.sendVoiceJoin();                // announce to the room
     if (this.onState) this.onState();
     return true;
@@ -139,14 +168,28 @@ export class Voice {
     this.peers.delete(peerId);
   }
 
-  // Per-frame: attenuate/pan each peer by how near they are in the world.
+  isSpeaking(id) { return this.speaking.has(id); }
+
+  // Debug: raw audio level for a peer (-1 if no sink yet).
+  peerLevel(id) {
+    const e = this.peers.get(id);
+    return e && e.sink ? audio.voiceLevel(e.sink) : -1;
+  }
+  ctxState() { return audio.audioCtxState(); }
+
+  // Per-frame: attenuate/pan each peer by how near they are, and detect who's
+  // currently talking (from the raw incoming audio level).
   update() {
     if (!this.enabled) return;
     for (const [id, entry] of this.peers) {
-      if (!entry.sink) continue;
+      if (!entry.sink) { this.speaking.delete(id); continue; }
       const p = this.peerPos(id);
       if (p) audio.setVoiceProximity(entry.sink, p);
       else entry.sink.gain.gain.value = 0;
+      // Noise gate: real speech is ~0.05–0.3 RMS, idle/quiet sits near 0.
+      if (audio.voiceLevel(entry.sink) > 0.02) this.speaking.add(id);
+      else this.speaking.delete(id);
     }
+    this.selfSpeaking = this.pushToTalk ? this.transmitting : !this.muted;
   }
 }

@@ -86,6 +86,28 @@ export class Character {
     this.group.add(spr);
   }
 
+  // Show a little speech bubble above the head while this player is talking.
+  setSpeaking(on) {
+    if (on === this._speaking) return;
+    this._speaking = on;
+    if (on && !this._speakSprite) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      const c = cv.getContext('2d');
+      c.fillStyle = '#2f9f3c';
+      c.beginPath(); c.arc(32, 28, 22, 0, Math.PI * 2); c.fill();
+      c.beginPath(); c.moveTo(22, 44); c.lineTo(40, 44); c.lineTo(28, 60); c.closePath(); c.fill();
+      c.fillStyle = '#fff';                    // three dots
+      for (const dx of [-10, 0, 10]) { c.beginPath(); c.arc(32 + dx, 28, 4, 0, Math.PI * 2); c.fill(); }
+      const tex = new THREE.CanvasTexture(cv);
+      this._speakSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+      this._speakSprite.scale.set(0.45, 0.45, 1);
+      this._speakSprite.position.y = LEG_H + TORSO_H + HEAD + 0.75;
+      this.group.add(this._speakSprite);
+    }
+    if (this._speakSprite) this._speakSprite.visible = on;
+  }
+
   setTransform(x, y, z, yaw) {
     this.group.position.set(x, y, z);
     this.group.rotation.y = yaw;     // model faces −Z at yaw 0, matching look dir
