@@ -1,0 +1,299 @@
+// Block catalogue + texture atlas for the voxel engine.
+//
+// Block ids MUST match server/worldgen.py. Each block maps its top / side /
+// bottom faces to a tile in a small texture atlas. Tiles are drawn
+// procedurally (pixel-art) so the game needs no external image files — but if
+// a matching PNG exists in /static/textures/<name>.png it is used instead,
+// which is how AI-generated art gets dropped in later.
+
+import * as THREE from 'three';
+
+export const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5,
+             SAND = 6, WATER = 7, PLANKS = 8, GLASS = 9, BRICK = 10, COBBLE = 11,
+             SNOW = 12, PUMPKIN = 13, GOLD = 14, DIAMOND = 15,
+             WOOL_RED = 16, WOOL_BLUE = 17, TNT = 18, FLINT = 19, GLOWSTONE = 20;
+
+// Tools live in the hotbar but are never placed as world blocks. Firestone
+// lights TNT instead of placing a block.
+export const FIRESTONE = 100;
+const TOOLS = new Set([FIRESTONE]);
+export const isTool = (b) => TOOLS.has(b);
+
+// Atlas layout: 8x8 grid of 16px tiles (room to grow).
+export const ATLAS_COLS = 8, ATLAS_ROWS = 8, TILE_PX = 16;
+
+// tile name -> atlas slot index (col = i%COLS, row = floor(i/COLS))
+const TILE = {
+  grass_top: 0, grass_side: 1, dirt: 2, stone: 3,
+  sand: 4, wood_top: 5, wood_side: 6, leaves: 7,
+  water: 8, planks: 9, glass: 10, brick: 11,
+  cobble: 12, snow: 13, pumpkin_top: 14, pumpkin_side: 15,
+  gold: 16, diamond: 17, wool_red: 18, wool_blue: 19,
+  tnt_side: 20, tnt_top: 21, flint: 22, firestone: 23, glowstone: 24,
+};
+
+// Blocks that emit light (rendered with an emissive glow material).
+export const isGlow = (b) => b === GLOWSTONE;
+
+export const BLOCKS = {
+  [GRASS]:  { name: 'Grass',  top: TILE.grass_top, side: TILE.grass_side, bottom: TILE.dirt },
+  [DIRT]:   { name: 'Dirt',   top: TILE.dirt,      side: TILE.dirt,       bottom: TILE.dirt },
+  [STONE]:  { name: 'Stone',  top: TILE.stone,     side: TILE.stone,      bottom: TILE.stone },
+  [WOOD]:   { name: 'Wood',   top: TILE.wood_top,  side: TILE.wood_side,  bottom: TILE.wood_top },
+  [LEAVES]: { name: 'Leaves', top: TILE.leaves,    side: TILE.leaves,     bottom: TILE.leaves },
+  [SAND]:   { name: 'Sand',   top: TILE.sand,      side: TILE.sand,       bottom: TILE.sand },
+  [WATER]:  { name: 'Water',  top: TILE.water,     side: TILE.water,      bottom: TILE.water },
+  [PLANKS]: { name: 'Planks', top: TILE.planks,    side: TILE.planks,     bottom: TILE.planks },
+  [GLASS]:  { name: 'Glass',  top: TILE.glass,     side: TILE.glass,      bottom: TILE.glass },
+  [BRICK]:  { name: 'Brick',  top: TILE.brick,     side: TILE.brick,      bottom: TILE.brick },
+  [COBBLE]: { name: 'Cobble', top: TILE.cobble,    side: TILE.cobble,     bottom: TILE.cobble },
+  [SNOW]:   { name: 'Snow',   top: TILE.snow,      side: TILE.snow,       bottom: TILE.snow },
+  [PUMPKIN]:{ name: 'Pumpkin',top: TILE.pumpkin_top, side: TILE.pumpkin_side, bottom: TILE.pumpkin_top },
+  [GOLD]:   { name: 'Gold',   top: TILE.gold,      side: TILE.gold,       bottom: TILE.gold },
+  [DIAMOND]:{ name: 'Diamond',top: TILE.diamond,   side: TILE.diamond,    bottom: TILE.diamond },
+  [WOOL_RED]: { name: 'Red Wool',  top: TILE.wool_red,  side: TILE.wool_red,  bottom: TILE.wool_red },
+  [WOOL_BLUE]:{ name: 'Blue Wool', top: TILE.wool_blue, side: TILE.wool_blue, bottom: TILE.wool_blue },
+  [TNT]:      { name: 'TNT',       top: TILE.tnt_top,   side: TILE.tnt_side,  bottom: TILE.tnt_top },
+  [FLINT]:    { name: 'Flint',     top: TILE.flint,     side: TILE.flint,     bottom: TILE.flint },
+  [GLOWSTONE]:{ name: 'Glowstone', top: TILE.glowstone, side: TILE.glowstone, bottom: TILE.glowstone },
+  [FIRESTONE]:{ name: 'Firestone (lights TNT)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
+};
+
+// Transparent for face-culling purposes (a face is drawn against these).
+const TRANSPARENT = new Set([AIR, WATER, GLASS, LEAVES]);
+export const isTransparent = (b) => TRANSPARENT.has(b);
+
+// Solid for physics / collision (everything you can stand on).
+export const isSolid = (b) => b !== AIR && b !== WATER;
+
+// What the player can place. Keys 1..0 pick the first ten; scroll reaches the
+// rest.
+export const HOTBAR = [
+  GRASS, DIRT, STONE, COBBLE, PLANKS, WOOD, LEAVES, SAND, BRICK, GLASS,
+  SNOW, PUMPKIN, GOLD, DIAMOND, WOOL_RED, WOOL_BLUE, GLOWSTONE, TNT, FLINT, FIRESTONE,
+];
+
+// --- Procedural pixel-art tiles ---------------------------------------------
+// Deterministic per-pixel noise so textures look the same every run.
+function hash(x, y, salt) {
+  let h = (x * 374761393 + y * 668265263 + salt * 2147483647) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  return (h >>> 8) / 0xFFFFFF; // 0..1
+}
+
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  r = Math.max(0, Math.min(255, r + amt));
+  g = Math.max(0, Math.min(255, g + amt));
+  b = Math.max(0, Math.min(255, b + amt));
+  return `rgb(${r},${g},${b})`;
+}
+
+function speckle(ctx, base, salt, jitter) {
+  for (let y = 0; y < 16; y++)
+    for (let x = 0; x < 16; x++) {
+      const amt = Math.floor((hash(x, y, salt) - 0.5) * jitter);
+      ctx.fillStyle = shade(base, amt);
+      ctx.fillRect(x, y, 1, 1);
+    }
+}
+
+const TILE_PAINTERS = {
+  dirt: (c) => speckle(c, '#8a5a3b', 1, 40),
+  grass_top: (c) => speckle(c, '#5fae3a', 2, 40),
+  stone: (c) => speckle(c, '#888888', 3, 36),
+  sand: (c) => speckle(c, '#ddca8c', 4, 28),
+  grass_side: (c) => {
+    speckle(c, '#8a5a3b', 1, 40);                 // dirt body
+    for (let x = 0; x < 16; x++) {
+      const lip = 3 + Math.floor(hash(x, 0, 9) * 3);
+      for (let y = 0; y < lip; y++) {
+        c.fillStyle = shade('#5fae3a', Math.floor((hash(x, y, 2) - 0.5) * 40));
+        c.fillRect(x, y, 1, 1);
+      }
+    }
+  },
+  wood_top: (c) => {
+    speckle(c, '#b5894e', 5, 24);
+    c.strokeStyle = shade('#7a5a30', 0);
+    c.beginPath(); c.arc(8, 8, 5, 0, Math.PI * 2); c.stroke();
+    c.beginPath(); c.arc(8, 8, 2.5, 0, Math.PI * 2); c.stroke();
+  },
+  wood_side: (c) => {
+    speckle(c, '#6e4a28', 6, 26);
+    for (let x = 1; x < 16; x += 4) {
+      c.fillStyle = shade('#4f3318', 0);
+      c.fillRect(x, 0, 1, 16);
+    }
+  },
+  planks: (c) => {
+    speckle(c, '#c19a5b', 9, 22);
+    c.fillStyle = shade('#8a6a36', -10);
+    for (let y = 0; y < 16; y += 4) c.fillRect(0, y, 16, 1);
+    for (let y = 0; y < 16; y += 4) c.fillRect((y % 8) ? 8 : 4, y, 1, 4);
+  },
+  brick: (c) => {
+    speckle(c, '#a43b2a', 10, 22);
+    c.fillStyle = '#cabfa6';                       // mortar
+    for (let y = 0; y < 16; y += 4) c.fillRect(0, y, 16, 1);
+    for (let y = 0; y < 16; y += 8) { c.fillRect(8, y, 1, 4); }
+    for (let y = 4; y < 16; y += 8) { c.fillRect(0, y, 1, 4); c.fillRect(15, y, 1, 4); }
+  },
+  cobble: (c) => {
+    speckle(c, '#7e7e7e', 3, 18);
+    c.fillStyle = '#5a5a5a';
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++)
+        if (hash(x, y, 12) > 0.86) c.fillRect(x, y, 1, 1);
+  },
+  leaves: (c) => {
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++) {
+        if (hash(x, y, 7) > 0.82) continue;        // gaps -> see-through
+        c.fillStyle = shade('#3f7d2e', Math.floor((hash(x, y, 8) - 0.5) * 60));
+        c.fillRect(x, y, 1, 1);
+      }
+  },
+  water: (c) => {
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++) {
+        c.fillStyle = shade('#2f6fd6', Math.floor((hash(x, y, 11) - 0.5) * 30));
+        c.fillRect(x, y, 1, 1);
+      }
+  },
+  glass: (c) => {
+    c.clearRect(0, 0, 16, 16);                     // mostly see-through
+    c.fillStyle = 'rgba(200,225,240,0.9)';         // frame
+    c.fillRect(0, 0, 16, 1); c.fillRect(0, 15, 16, 1);
+    c.fillRect(0, 0, 1, 16); c.fillRect(15, 0, 1, 16);
+    c.fillStyle = 'rgba(220,240,255,0.8)';         // diagonal glint
+    for (let i = 3; i < 12; i++) c.fillRect(i, i, 1, 1);
+  },
+  snow: (c) => speckle(c, '#eef3fa', 14, 14),
+  gold: (c) => {
+    speckle(c, '#f1c92e', 16, 26);
+    c.fillStyle = 'rgba(255,255,255,0.9)';         // a few shiny pixels
+    for (let i = 0; i < 6; i++) c.fillRect(2 + (i * 3) % 12, 2 + (i * 5) % 12, 1, 1);
+  },
+  diamond: (c) => {
+    speckle(c, '#56d6d6', 17, 22);
+    c.fillStyle = 'rgba(255,255,255,0.85)';        // facet highlights
+    for (let i = 2; i < 14; i += 4) { c.fillRect(i, i, 2, 1); c.fillRect(14 - i, i, 1, 2); }
+  },
+  wool_red: (c) => speckle(c, '#c63f3f', 18, 18),
+  wool_blue: (c) => speckle(c, '#3f59c6', 19, 18),
+  pumpkin_top: (c) => {
+    speckle(c, '#e08a2a', 20, 22);
+    c.fillStyle = '#6e4a18';                        // stem
+    c.fillRect(7, 6, 2, 4);
+  },
+  pumpkin_side: (c) => {
+    speckle(c, '#e08a2a', 20, 18);
+    c.fillStyle = shade('#b56a16', 0);              // vertical ridges
+    for (let x = 2; x < 16; x += 4) c.fillRect(x, 0, 1, 16);
+    c.fillStyle = '#3a2408';                        // carved face
+    c.fillRect(3, 5, 2, 2); c.fillRect(11, 5, 2, 2);     // eyes
+    c.fillRect(7, 6, 2, 2);                              // nose
+    c.fillRect(4, 10, 8, 1); c.fillRect(4, 9, 1, 1);
+    c.fillRect(11, 9, 1, 1); c.fillRect(6, 11, 1, 1); c.fillRect(9, 11, 1, 1);  // grin
+  },
+  tnt_side: (c) => {
+    speckle(c, '#c0392b', 30, 16);                  // red body
+    c.fillStyle = '#efe7cf';                        // cream label band
+    c.fillRect(0, 5, 16, 6);
+    c.fillStyle = '#7a2018';                        // "TNT" letters
+    const letterT = (x) => { c.fillRect(x, 6, 3, 1); c.fillRect(x + 1, 6, 1, 4); };
+    const letterN = (x) => {
+      c.fillRect(x, 6, 1, 4); c.fillRect(x + 2, 6, 1, 4);
+      c.fillRect(x + 1, 7, 1, 1); c.fillRect(x + 1, 8, 1, 1);
+    };
+    letterT(1); letterN(6); letterT(11);
+  },
+  tnt_top: (c) => {
+    speckle(c, '#a8302a', 31, 14);
+    c.fillStyle = '#2f2f2f';                        // fuse hole
+    c.beginPath(); c.arc(8, 8, 3, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#caa15a';                        // fuse stub
+    c.fillRect(7, 7, 2, 2);
+  },
+  flint: (c) => {
+    speckle(c, '#3b3f47', 32, 20);                  // dark blue-grey stone
+    c.fillStyle = '#23262b';
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++)
+        if (hash(x, y, 33) > 0.78) c.fillRect(x, y, 1, 1);   // chipped facets
+  },
+  glowstone: (c) => {
+    speckle(c, '#a87b36', 40, 22);                  // warm amber stone base
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++) {
+        const h = hash(x, y, 41);
+        if (h > 0.86) { c.fillStyle = '#fff3b0'; c.fillRect(x, y, 1, 1); }      // bright cores
+        else if (h > 0.70) { c.fillStyle = '#ffcb52'; c.fillRect(x, y, 1, 1); } // warm glow
+      }
+    c.fillStyle = '#ffe488';                        // a few larger embers
+    c.fillRect(3, 3, 2, 2); c.fillRect(10, 9, 2, 2); c.fillRect(7, 11, 2, 2);
+    c.fillStyle = '#fff3b0';
+    c.fillRect(4, 4, 1, 1); c.fillRect(11, 10, 1, 1);
+  },
+  firestone: (c) => {
+    c.clearRect(0, 0, 16, 16);                      // icon only (transparent bg)
+    c.fillStyle = '#9aa0a8'; c.fillRect(3, 7, 9, 3);        // steel striker
+    c.fillStyle = '#6f757d'; c.fillRect(3, 9, 9, 1);
+    c.fillStyle = '#7a5a30'; c.fillRect(2, 9, 3, 4);        // handle
+    c.fillStyle = '#2b2f36'; c.fillRect(9, 3, 4, 4);        // flint
+    c.fillStyle = '#ffd34d';                               // sparks
+    c.fillRect(12, 2, 1, 1); c.fillRect(13, 4, 1, 1); c.fillRect(11, 1, 1, 1);
+  },
+};
+
+// Build the atlas texture. Prefers /static/textures/<name>.png if present,
+// otherwise paints the procedural tile. Returns a Promise<THREE.Texture>.
+export async function buildAtlasTexture() {
+  const size = ATLAS_COLS * TILE_PX;
+  const atlas = document.createElement('canvas');
+  atlas.width = size; atlas.height = size;
+  const actx = atlas.getContext('2d');
+
+  const loadOverride = (name) => new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = `/static/textures/${name}.png`;
+  });
+
+  for (const [name, slot] of Object.entries(TILE)) {
+    const col = slot % ATLAS_COLS, row = Math.floor(slot / ATLAS_COLS);
+    const ox = col * TILE_PX, oy = row * TILE_PX;
+    const img = await loadOverride(name);
+    if (img) {
+      actx.imageSmoothingEnabled = false;
+      actx.drawImage(img, ox, oy, TILE_PX, TILE_PX);
+    } else {
+      const tile = document.createElement('canvas');
+      tile.width = TILE_PX; tile.height = TILE_PX;
+      (TILE_PAINTERS[name] || ((c) => speckle(c, '#cc00cc', 0, 0)))(tile.getContext('2d'));
+      actx.drawImage(tile, ox, oy);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(atlas);
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// UV rect for a tile slot, with a tiny inset to avoid edge bleeding.
+export function tileUV(slot) {
+  const col = slot % ATLAS_COLS, row = Math.floor(slot / ATLAS_COLS);
+  const inset = 0.5 / (ATLAS_COLS * TILE_PX);
+  const u0 = col / ATLAS_COLS + inset;
+  const u1 = (col + 1) / ATLAS_COLS - inset;
+  // Atlas canvas is drawn top-down; CanvasTexture flips Y, so tile-top -> v1.
+  const v1 = 1 - row / ATLAS_ROWS - inset;
+  const v0 = 1 - (row + 1) / ATLAS_ROWS + inset;
+  return { u0, u1, v0, v1 };
+}

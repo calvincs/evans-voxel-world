@@ -1,0 +1,23 @@
+# Secrets — never commit the API key
+tech-notes.txt
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime save data (per-machine; worlds regenerate from seed + edits)
+/data/
+
+# Scratch / OS
+*.log
+.DS_Store
+
+# Large candidate music downloads — kept on disk, out of git. The canonical
+# override filenames the game actually loads are still allowed below.
+static/audio/*.mp3
+!static/audio/music.mp3
+!static/audio/break.mp3
+!static/audio/place.mp3
+!static/audio/step.mp3
+!static/audio/explode.mp3

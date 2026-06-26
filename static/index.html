@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Evan's Voxel World</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <script type="importmap">
+    { "imports": { "three": "/static/js/vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="crosshair"></div>
+
+  <div id="hud">
+    <div id="coords">x 0  y 0  z 0</div>
+  </div>
+
+  <button id="music" title="Music on / off">🔊</button>
+
+  <div id="hotbar"></div>
+
+  <!-- World-selection menu (shown first) -->
+  <div id="menu">
+    <div class="panel menu-panel">
+      <img id="banner" src="/static/textures/banner.png" alt="Evan's World"
+           onerror="this.remove()" />
+      <div id="name-row">
+        <label for="player-name">Playing as</label>
+        <input id="player-name" type="text" maxlength="20" placeholder="Your name"
+               autocomplete="off" />
+      </div>
+      <h2>Choose a world</h2>
+      <div id="world-list"><p class="loading">Loading…</p></div>
+      <div id="new-world">
+        <input id="world-name" type="text" maxlength="40"
+               placeholder="New world name…" autocomplete="off" />
+        <button id="create-world">✛ Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Play / pause screen (shown after a world is chosen) -->
+  <div id="overlay" class="hidden">
+    <div class="panel">
+      <h1 id="title">World</h1>
+      <ul class="controls">
+        <li><b>W A S D</b> — move</li>
+        <li><b>Mouse</b> — look around</li>
+        <li><b>Space</b> — jump &nbsp;·&nbsp; <b>Shift</b> — run</li>
+        <li><b>Left click</b> — break block</li>
+        <li><b>Right click</b> — place block</li>
+        <li><b>1–0</b> or <b>scroll</b> — pick a block</li>
+        <li><b>V</b> — change view (1st / 3rd person)</li>
+        <li><b>Esc</b> — pause</li>
+      </ul>
+      <div class="buttons">
+        <button id="play">▶ Play</button>
+        <button id="worlds">← Worlds</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>
