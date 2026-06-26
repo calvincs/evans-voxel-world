@@ -27,7 +27,10 @@ seconds. After that it starts instantly.)
 | Left click | break a block |
 | Right click | place a block |
 | `1`–`0` / scroll | choose a block |
+| `E` | inventory (pick any block) |
 | `V` | first / third-person view |
+| `M` | music on/off |
+| `🎙️` / hold `T` | join voice / talk |
 | `Esc` | pause |
 
 ## How it works
@@ -76,6 +79,19 @@ To use **real** audio instead, drop files into `static/audio/` — `music.mp3`,
 `break.wav`, `place.wav`, `step.wav` (`.mp3`/`.ogg`/`.wav` all work). Anything
 present overrides the synthesized version. Free CC0 sources and details are in
 `static/audio/README.txt`.
+
+## Animals, inventory & crafting
+
+Friendly **pigs, sheep and cows** wander the grass near you (ambient — they
+don't fight or despawn your builds). They're client-side for now, so each player
+sees their own; syncing them across multiplayer is a future step (`mobs.js`).
+
+Press **E** for the **inventory** — a picker for *every* block (including ones
+not on your hotbar). Click a block to load it into your currently-selected
+hotbar slot. It's **creative**: blocks never run out. The **✨ Craft** section
+combines two blocks into a special one (Mossy Cobble, Marble, Rainbow) — a fun,
+no-cost twist. Add blocks/recipes in `static/js/blocks.js` (`ALL_BLOCKS`,
+`CRAFT`).
 
 ## Blocks, TNT & Firestone
 

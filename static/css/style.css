@@ -89,9 +89,61 @@ html, body {
   cursor: pointer;
   transition: background 0.15s;
 }
+#music, #voice, #bag {
+  position: fixed;
+  z-index: 7;
+  width: 40px; height: 40px;
+  border: none; border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff; font-size: 20px; line-height: 40px; text-align: center;
+  cursor: pointer; transition: background 0.15s;
+}
 #music { top: 10px; right: 12px; }
 #voice { top: 10px; right: 60px; }
-#music:hover, #voice:hover { background: rgba(0, 0, 0, 0.55); }
+#bag   { top: 10px; right: 108px; }
+#music:hover, #voice:hover, #bag:hover { background: rgba(0, 0, 0, 0.55); }
+
+/* --- Inventory ------------------------------------------------------------ */
+#inventory {
+  position: fixed; inset: 0; z-index: 9;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(20, 30, 50, 0.55); backdrop-filter: blur(3px);
+}
+#inventory.hidden { display: none; }
+.inv-panel {
+  background: linear-gradient(180deg, #ffffff, #eaf3ff);
+  border: 4px solid #2f6fd6; border-radius: 18px;
+  padding: 18px 22px; max-width: 560px; width: 92vw;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  text-align: center;
+}
+.inv-panel h2 { color: #2f6fd6; font-size: 20px; margin-bottom: 12px; }
+.inv-panel h3 { color: #7a5ec0; font-size: 16px; margin: 14px 0 8px; }
+.inv-hint { color: #7c8aa3; font-size: 13px; font-weight: normal; }
+#inv-grid {
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px;
+  max-height: 42vh; overflow-y: auto;
+}
+.inv-item, .craft-item {
+  position: relative; cursor: pointer;
+  border: 3px solid rgba(47, 111, 214, 0.25); border-radius: 8px;
+  background: rgba(47, 111, 214, 0.06); padding: 3px;
+  display: flex; align-items: center; justify-content: center;
+}
+.inv-item:hover, .craft-item:hover { border-color: #2f9f3c; background: #eefaf0; }
+.inv-item canvas { width: 38px; height: 38px; image-rendering: pixelated; }
+#inv-craft { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.craft-item { flex-direction: column; padding: 6px 10px; gap: 2px; }
+.craft-item canvas { width: 34px; height: 34px; image-rendering: pixelated; }
+.craft-recipe { display: flex; align-items: center; gap: 2px; font-size: 11px; color: #6a7892; }
+.craft-recipe canvas { width: 16px; height: 16px; image-rendering: pixelated; }
+.craft-name { font-size: 12px; font-weight: bold; color: #28303d; }
+#inv-close {
+  margin-top: 14px; font: inherit; font-size: 15px; font-weight: bold;
+  padding: 8px 24px; border: none; border-radius: 10px;
+  background: #2f6fd6; color: #fff; cursor: pointer;
+}
+#inv-close:hover { background: #1f5bc0; }
 #voice.joined { background: rgba(47, 110, 214, 0.7); }  /* in voice, not talking */
 #voice.live { background: rgba(47, 159, 60, 0.85); }    /* transmitting */
 #voice.muted { background: rgba(176, 58, 58, 0.7); }

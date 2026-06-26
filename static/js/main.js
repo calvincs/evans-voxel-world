@@ -16,7 +16,7 @@ import { RemotePlayers, playerColor, SELF_COLOR } from './remoteplayers.js';
 import { Voice } from './voice.js';
 import { Mobs } from './mobs.js';
 import {
-  buildAtlasTexture, BLOCKS, HOTBAR, ATLAS_COLS, TILE_PX, blockColor,
+  buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, CRAFT, ATLAS_COLS, TILE_PX, blockColor,
 } from './blocks.js';
 
 const $ = (id) => document.getElementById(id);
@@ -281,8 +281,73 @@ async function startGame(worldId, demo) {
   overlay.addEventListener('click', () => player.engage());
   $('play').addEventListener('click', (e) => { e.stopPropagation(); player.engage(); });
   $('worlds').addEventListener('click', (e) => { e.stopPropagation(); location.reload(); });
+  let inventoryOpen = false;
   document.addEventListener('pointerlockchange', () => {
-    if (!isTouch) overlay.classList.toggle('hidden', document.pointerLockElement === canvas);
+    if (isTouch || inventoryOpen) return;   // inventory manages its own overlay
+    overlay.classList.toggle('hidden', document.pointerLockElement === canvas);
+  });
+
+  // --- Inventory (E) ---------------------------------------------------------
+  const atlasImg = atlas.image;
+  buildInventory();
+  function buildInventory() {
+    const grid = $('inv-grid'); grid.innerHTML = '';
+    for (const block of ALL_BLOCKS) {
+      const item = document.createElement('div');
+      item.className = 'inv-item'; item.title = BLOCKS[block].name;
+      const cv = document.createElement('canvas'); cv.width = cv.height = 40;
+      drawBlockIcon(cv, atlasImg, block, 40);
+      item.appendChild(cv);
+      item.addEventListener('click', () => pickBlock(block));
+      grid.appendChild(item);
+    }
+    const craft = $('inv-craft'); craft.innerHTML = '';
+    for (const r of CRAFT) {
+      const item = document.createElement('div');
+      item.className = 'craft-item'; item.title = 'Make ' + BLOCKS[r.out].name;
+      const out = document.createElement('canvas'); out.width = out.height = 34;
+      drawBlockIcon(out, atlasImg, r.out, 34); item.appendChild(out);
+      const nm = document.createElement('div'); nm.className = 'craft-name';
+      nm.textContent = BLOCKS[r.out].name; item.appendChild(nm);
+      const rec = document.createElement('div'); rec.className = 'craft-recipe';
+      r.inputs.forEach((inb, idx) => {
+        const ic = document.createElement('canvas'); ic.width = ic.height = 16;
+        drawBlockIcon(ic, atlasImg, inb, 16); rec.appendChild(ic);
+        if (idx < r.inputs.length - 1) { const p = document.createElement('span'); p.textContent = '+'; rec.appendChild(p); }
+      });
+      item.appendChild(rec);
+      item.addEventListener('click', () => pickBlock(r.out));
+      craft.appendChild(item);
+    }
+  }
+  function pickBlock(block) {
+    HOTBAR[player.selected] = block;            // load it into the active slot
+    updateHotbarSlot(player.selected, atlasImg);
+    closeInventory(true);
+  }
+  function openInventory() {
+    if (inventoryOpen) return;
+    inventoryOpen = true;
+    $('inventory').classList.remove('hidden');
+    if (!isTouch && document.pointerLockElement === canvas) document.exitPointerLock();
+  }
+  function closeInventory(relock) {
+    if (!inventoryOpen) return;
+    inventoryOpen = false;
+    $('inventory').classList.add('hidden');
+    if (relock && !isTouch) canvas.requestPointerLock();
+  }
+  $('bag').addEventListener('click', (e) => { e.stopPropagation(); inventoryOpen ? closeInventory(true) : openInventory(); });
+  $('inv-close').addEventListener('click', (e) => { e.stopPropagation(); closeInventory(true); });
+  $('inventory').addEventListener('click', (e) => { if (e.target === $('inventory')) closeInventory(true); });
+  document.addEventListener('keydown', (e) => {
+    if (typing()) return;
+    if (e.code === 'KeyE' && !e.repeat) {
+      if (inventoryOpen) closeInventory(true);
+      else if (player.locked) openInventory();
+    } else if (e.code === 'Escape' && inventoryOpen) {
+      closeInventory(false);
+    }
   });
 
   // Music: 🔊 button + M hotkey.
@@ -341,6 +406,16 @@ async function startGame(worldId, demo) {
 }
 
 // --- HUD ---------------------------------------------------------------------
+// Draw a block's face icon from the atlas into a canvas.
+function drawBlockIcon(canvas, atlasCanvas, block, size) {
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, size, size);
+  const t = BLOCKS[block].side;
+  ctx.drawImage(atlasCanvas, (t % ATLAS_COLS) * TILE_PX, Math.floor(t / ATLAS_COLS) * TILE_PX,
+    TILE_PX, TILE_PX, 0, 0, size, size);
+}
+
 function buildHotbar(atlasCanvas, player) {
   const bar = $('hotbar');
   bar.innerHTML = '';
@@ -351,12 +426,7 @@ function buildHotbar(atlasCanvas, player) {
 
     const icon = document.createElement('canvas');
     icon.width = icon.height = 36;
-    const ctx = icon.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
-    const t = BLOCKS[block].side;
-    const sx = (t % ATLAS_COLS) * TILE_PX;
-    const sy = Math.floor(t / ATLAS_COLS) * TILE_PX;
-    ctx.drawImage(atlasCanvas, sx, sy, TILE_PX, TILE_PX, 0, 0, 36, 36);
+    drawBlockIcon(icon, atlasCanvas, block, 36);
     slot.appendChild(icon);
 
     if (i < 10) {
@@ -369,6 +439,12 @@ function buildHotbar(atlasCanvas, player) {
     bar.appendChild(slot);
   });
   highlightSlot(0);
+}
+
+// Redraw one hotbar slot's icon (after the inventory changes its block).
+function updateHotbarSlot(i, atlasCanvas) {
+  const cv = document.querySelectorAll('#hotbar .slot canvas')[i];
+  if (cv) { cv.title = BLOCKS[HOTBAR[i]].name; drawBlockIcon(cv, atlasCanvas, HOTBAR[i], 36); }
 }
 
 function highlightSlot(i) {

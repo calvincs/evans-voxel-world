@@ -11,7 +11,8 @@ import * as THREE from 'three';
 export const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5,
              SAND = 6, WATER = 7, PLANKS = 8, GLASS = 9, BRICK = 10, COBBLE = 11,
              SNOW = 12, PUMPKIN = 13, GOLD = 14, DIAMOND = 15,
-             WOOL_RED = 16, WOOL_BLUE = 17, TNT = 18, FLINT = 19, GLOWSTONE = 20;
+             WOOL_RED = 16, WOOL_BLUE = 17, TNT = 18, FLINT = 19, GLOWSTONE = 20,
+             MOSSY = 21, MARBLE = 22, RAINBOW = 23;
 
 // Tools live in the hotbar but are never placed as world blocks. Firestone
 // lights TNT instead of placing a block.
@@ -30,6 +31,7 @@ const TILE = {
   cobble: 12, snow: 13, pumpkin_top: 14, pumpkin_side: 15,
   gold: 16, diamond: 17, wool_red: 18, wool_blue: 19,
   tnt_side: 20, tnt_top: 21, flint: 22, firestone: 23, glowstone: 24,
+  mossy: 25, marble: 26, rainbow: 27,
 };
 
 // Blocks that emit light (rendered with an emissive glow material).
@@ -66,6 +68,9 @@ export const BLOCKS = {
   [TNT]:      { name: 'TNT',       top: TILE.tnt_top,   side: TILE.tnt_side,  bottom: TILE.tnt_top },
   [FLINT]:    { name: 'Flint',     top: TILE.flint,     side: TILE.flint,     bottom: TILE.flint },
   [GLOWSTONE]:{ name: 'Glowstone', top: TILE.glowstone, side: TILE.glowstone, bottom: TILE.glowstone },
+  [MOSSY]:    { name: 'Mossy Cobble', top: TILE.mossy,  side: TILE.mossy,   bottom: TILE.mossy },
+  [MARBLE]:   { name: 'Marble',    top: TILE.marble,    side: TILE.marble,   bottom: TILE.marble },
+  [RAINBOW]:  { name: 'Rainbow',   top: TILE.rainbow,   side: TILE.rainbow,  bottom: TILE.rainbow },
   [FIRESTONE]:{ name: 'Firestone (lights TNT)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
 };
 
@@ -81,6 +86,21 @@ export const isSolid = (b) => b !== AIR && b !== WATER;
 export const HOTBAR = [
   GRASS, DIRT, STONE, COBBLE, PLANKS, WOOD, LEAVES, SAND, BRICK, GLASS,
   SNOW, PUMPKIN, GOLD, DIAMOND, WOOL_RED, WOOL_BLUE, GLOWSTONE, TNT, FLINT, FIRESTONE,
+];
+
+// Everything available in the inventory picker (E).
+export const ALL_BLOCKS = [
+  GRASS, DIRT, STONE, COBBLE, MOSSY, MARBLE, PLANKS, WOOD, LEAVES, SAND,
+  SNOW, BRICK, GLASS, GLOWSTONE, GOLD, DIAMOND, PUMPKIN,
+  WOOL_RED, WOOL_BLUE, RAINBOW, TNT, FLINT, FIRESTONE,
+];
+
+// "Crafting" (creative twist): combine two blocks to unlock a special one.
+// Inputs are flavour only — nothing is consumed.
+export const CRAFT = [
+  { out: MOSSY,   inputs: [COBBLE, LEAVES] },
+  { out: MARBLE,  inputs: [STONE, DIAMOND] },
+  { out: RAINBOW, inputs: [WOOL_RED, WOOL_BLUE] },
 ];
 
 // --- Procedural pixel-art tiles ---------------------------------------------
@@ -246,6 +266,29 @@ const TILE_PAINTERS = {
     c.fillRect(3, 3, 2, 2); c.fillRect(10, 9, 2, 2); c.fillRect(7, 11, 2, 2);
     c.fillStyle = '#fff3b0';
     c.fillRect(4, 4, 1, 1); c.fillRect(11, 10, 1, 1);
+  },
+  mossy: (c) => {
+    speckle(c, '#7e7e7e', 3, 18);                   // cobble grey base
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++)
+        if (hash(x, y, 55) > 0.68) {
+          c.fillStyle = shade('#4a7a3a', Math.floor((hash(x, y, 56) - 0.5) * 36));
+          c.fillRect(x, y, 1, 1);
+        }
+  },
+  marble: (c) => {
+    speckle(c, '#e9e9f0', 50, 8);                   // near-white
+    c.strokeStyle = 'rgba(150,150,170,0.55)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(2, 3); c.lineTo(7, 8); c.lineTo(5, 14); c.stroke();
+    c.beginPath(); c.moveTo(11, 1); c.lineTo(9, 7); c.lineTo(14, 13); c.stroke();
+  },
+  rainbow: (c) => {
+    const cols = ['#e23b3b', '#e8862b', '#e8d23b', '#3fae3a', '#3f6fd6', '#9b3fd6'];
+    const bh = 16 / cols.length;
+    for (let i = 0; i < cols.length; i++) {
+      c.fillStyle = cols[i];
+      c.fillRect(0, Math.round(i * bh), 16, Math.ceil(bh) + 1);
+    }
   },
   firestone: (c) => {
     c.clearRect(0, 0, 16, 16);                      // icon only (transparent bg)
