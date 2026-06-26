@@ -14,6 +14,7 @@ import * as audio from './audio.js';
 import { Net } from './net.js';
 import { RemotePlayers, playerColor, SELF_COLOR } from './remoteplayers.js';
 import { Voice } from './voice.js';
+import { Mobs } from './mobs.js';
 import {
   buildAtlasTexture, BLOCKS, HOTBAR, ATLAS_COLS, TILE_PX, blockColor,
 } from './blocks.js';
@@ -142,6 +143,8 @@ async function startGame(worldId, demo) {
   buildHotbar(atlas.image, player);
   world.update(spawn.x, spawn.z);   // preload spawn chunks
 
+  const mobs = new Mobs(scene, world);   // wandering animals
+
   // Multiplayer: stream our position and apply others' edits + movements.
   const remotes = new RemotePlayers(scene);
   const myName = playerName();
@@ -188,6 +191,13 @@ async function startGame(worldId, demo) {
   voice.onRoster = (id, inVoice) => { if (inVoice) voiceIds.add(id); else voiceIds.delete(id); renderRoster(); };
   voice.onState = () => { updateVoiceButton(); renderRoster(); };
   setupVoiceButton(voice);
+
+  // True while a text field (the name inputs on the menu) is focused, so game
+  // hotkeys don't fire while typing.
+  function typing() {
+    const a = document.activeElement;
+    return !!(a && a.tagName === 'INPUT');
+  }
 
   function renderRoster() {
     const el = $('roster');
@@ -253,12 +263,12 @@ async function startGame(worldId, demo) {
     talk.addEventListener('pointercancel', up);
     talk.addEventListener('pointerleave', up);
     // Keyboard push-to-talk: hold T.
-    document.addEventListener('keydown', (e) => { if (e.code === 'KeyT' && !e.repeat && v.enabled) v.startTalk(); });
+    document.addEventListener('keydown', (e) => { if (e.code === 'KeyT' && !e.repeat && v.enabled && !typing()) v.startTalk(); });
     document.addEventListener('keyup', (e) => { if (e.code === 'KeyT') v.stopTalk(); });
     updateVoiceButton();
   }
 
-  window.game = { world, player, sky, remotes, net, voice };
+  window.game = { world, player, sky, remotes, net, voice, mobs };
 
   // Swap the menu for the play screen.
   $('menu').classList.add('hidden');
@@ -273,6 +283,14 @@ async function startGame(worldId, demo) {
   $('worlds').addEventListener('click', (e) => { e.stopPropagation(); location.reload(); });
   document.addEventListener('pointerlockchange', () => {
     if (!isTouch) overlay.classList.toggle('hidden', document.pointerLockElement === canvas);
+  });
+
+  // Music: 🔊 button + M hotkey.
+  const musicBtn = $('music');
+  const toggleMusicUI = () => { audio.resume(); musicBtn.textContent = audio.toggleMusic() ? '🔊' : '🔇'; };
+  musicBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleMusicUI(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyM' && !e.repeat && !typing()) toggleMusicUI();
   });
 
   // Persist player position to this world.
@@ -302,6 +320,7 @@ async function startGame(worldId, demo) {
     audio.setListener(player.pos.x, player.pos.y + 1.62, player.pos.z, player.yaw);
     sky.update(dt, player.pos);
     world.update(player.pos.x, player.pos.z, dt, sky.daylight);
+    mobs.update(dt, player.pos);
 
     // Multiplayer sync.
     if (player.locked) net.sendPos(player.state(), performance.now());
