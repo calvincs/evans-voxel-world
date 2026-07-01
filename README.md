@@ -1,6 +1,6 @@
 # Evan's Voxel World
 
-A little Minecraft-style voxel game, built from scratch for Evan. A FastAPI
+A little blocky voxel sandbox game, built from scratch for Evan. A FastAPI
 backend generates and saves the world; a custom voxel engine in the browser
 (on top of Three.js for the WebGL plumbing) does the rendering, physics, and
 block editing.
@@ -37,9 +37,11 @@ seconds. After that it starts instantly.)
 
 ```
 server/
-  main.py       FastAPI: world menu API + per-world chunks / edits / player
+  main.py       FastAPI: auth + world menu API + per-world chunks / edits / player
   worldgen.py   Perlin-noise terrain (hills, water, beaches, trees)
   storage.py    multi-world saves — one file per world in data/worlds/
+  accounts.py   users + login sessions (stdlib PBKDF2 hashing, no extra deps)
+  snapshots.py  per-world rewind history in data/snapshots/
 static/
   index.html, css/
   js/
@@ -54,14 +56,40 @@ static/
     vendor/three.module.js
 ```
 
+### Accounts
+
+On launch you **sign in or create an account** (username + password). Accounts
+live in `data/users.json` — passwords are salted and hashed with PBKDF2 (no
+plaintext, no extra libraries), and login sessions are cookies stored in
+`data/sessions.json`. From the menu you can open **⚙ Profile** to change your
+display name, pick your character color, or set a new password. Only you (while
+signed in) can edit your own profile.
+
 ### Worlds
 
-On launch you get a **menu** to create a new named world or load one you've
-already played. Each world is one file in `data/worlds/<id>.json` holding its
-name, a random **seed**, the player's last position, and only the blocks Evan
-changed. Terrain is regenerated deterministically from the seed, so the whole
-world is reproduced exactly from that tiny file — no need to store the millions
-of untouched blocks. Delete a world from the menu (🗑) or remove its file.
+After signing in you get a **menu** to create a new named world or load one you
+can see. Each world is one file in `data/worlds/<id>.json` holding its name, a
+random **seed**, owner, visibility, the player's last position, and only the
+blocks players changed. Terrain is regenerated deterministically from the seed,
+so the whole world is reproduced exactly from that tiny file.
+
+- **Ownership** — whoever creates a world owns it. Only the owner can rename it,
+  change its visibility, delete it (🗑), or rewind it.
+- **Public / private** — worlds are **public** by default (everyone on the LAN
+  sees them); toggle the 🌐/🔒 button to make one private (only you see it).
+- **Claim** — worlds created before accounts existed show as *Unclaimed*; press
+  **Claim** to become their owner.
+
+### Rewind (snapshots)
+
+While a world is played the server quietly captures **snapshots** of its state
+into `data/snapshots/<id>/`. The owner can open **⏱ Snapshots** (from the world
+row or the in-game pause screen) to see a timeline and **rewind** the world to an
+earlier point — handy for undoing a session of changes. Rewinding takes a safety
+snapshot of the current state first (so it's itself undoable) and sends everyone
+in that world back to the menu while the state is restored. Snapshots roll over
+automatically: everything from the last day is kept, then thinned to one an hour
+for a week, then dropped.
 
 ### Custom textures
 

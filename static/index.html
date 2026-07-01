@@ -37,15 +37,74 @@
 
   <div id="hotbar"></div>
 
-  <!-- World-selection menu (shown first) -->
-  <div id="menu">
+  <!-- Sign in / create account (shown before the world menu) -->
+  <div id="auth" class="hidden">
+    <div class="panel menu-panel">
+      <img src="/static/textures/banner.png" alt="Evan's World" onerror="this.remove()"
+           style="width:240px;max-width:100%;border-radius:12px;margin:-6px auto 14px;display:block" />
+      <div class="tabs">
+        <button id="tab-login" class="tab active">Sign in</button>
+        <button id="tab-register" class="tab">Create account</button>
+      </div>
+      <div class="auth-fields">
+        <div id="auth-pick-row" class="login-row">
+          <span class="who-dot" id="auth-dot"></span>
+          <select id="auth-select" class="auth-select"></select>
+        </div>
+        <input id="auth-user" type="text" maxlength="20" placeholder="Username" autocomplete="username" />
+        <input id="auth-pass" type="password" maxlength="64" placeholder="Password" autocomplete="current-password" />
+        <div id="auth-color-row" class="color-row hidden">
+          <span class="color-label">Pick your color</span>
+          <div id="auth-colors" class="swatches"></div>
+        </div>
+      </div>
+      <p id="auth-error" class="auth-error"></p>
+      <button id="auth-submit" class="primary-btn">Sign in ▶</button>
+    </div>
+  </div>
+
+  <!-- Profile editor -->
+  <div id="profile" class="hidden">
+    <div class="panel menu-panel">
+      <h2>Your profile</h2>
+      <div class="auth-fields">
+        <label class="field-label">Display name</label>
+        <input id="prof-name" type="text" maxlength="20" placeholder="Display name" autocomplete="off" />
+        <label class="field-label">Character color</label>
+        <div id="prof-colors" class="swatches"></div>
+        <label class="field-label">New password <span class="hint">(leave blank to keep)</span></label>
+        <input id="prof-pass" type="password" maxlength="64" placeholder="New password" autocomplete="new-password" />
+      </div>
+      <p id="prof-error" class="auth-error"></p>
+      <div class="buttons">
+        <button id="prof-save" class="primary-btn">Save</button>
+        <button id="prof-cancel" class="ghost-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- World history / snapshots (rewind) -->
+  <div id="history" class="hidden">
+    <div class="panel menu-panel">
+      <h2 id="hist-title">Snapshots</h2>
+      <p class="hist-hint">Pick a moment to rewind this world to. Everyone in the world will be sent back to the menu while it restores.</p>
+      <div id="hist-list"><p class="loading">Loading…</p></div>
+      <div class="buttons">
+        <button id="hist-close" class="ghost-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- World-selection menu -->
+  <div id="menu" class="hidden">
     <div class="panel menu-panel">
       <img id="banner" src="/static/textures/banner.png" alt="Evan's World"
            onerror="this.remove()" />
-      <div id="name-row">
-        <label for="player-name">Playing as</label>
-        <input id="player-name" type="text" maxlength="20" placeholder="Your name"
-               autocomplete="off" />
+      <div id="who-row">
+        <span class="who-dot" id="who-dot"></span>
+        <span id="who-name">Signed in</span>
+        <button id="profile-open" title="Edit your profile">⚙ Profile</button>
+        <button id="logout">Log out</button>
       </div>
       <h2>Choose a world</h2>
       <div id="world-list"><p class="loading">Loading…</p></div>
@@ -76,6 +135,7 @@
       </ul>
       <div class="buttons">
         <button id="play">▶ Play</button>
+        <button id="snapshots" class="ghost-btn hidden">⏱ Snapshots</button>
         <button id="worlds">← Worlds</button>
       </div>
     </div>

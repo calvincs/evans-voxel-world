@@ -1,10 +1,10 @@
 """
-EvansGame — FastAPI server (multi-world).
+EvansGame — FastAPI server (multi-world, with accounts).
 
-Worlds are listed/created/deleted via /api/worlds, and everything else is
-scoped to a world id: /api/worlds/{id}/config, /chunk, /edit, /edits, /player.
-Each world regenerates its terrain from its own seed and layers the player's
-saved edits on top.
+Players sign in (username + password); worlds are owned by their creator and can
+be public or private. Everything under /api/worlds requires a session, and the
+owner can rewind a world to an earlier snapshot (which boots everyone out until
+the state is restored). Auth uses only the standard library — see accounts.py.
 
 Run:  python -m uvicorn server.main:app --reload  (or ./run.sh)
 """
@@ -14,22 +14,39 @@ import os
 
 import itertools
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import worldgen
-from .storage import WorldStore
+from .accounts import UserStore, SessionStore, DEFAULT_COLORS
+from .snapshots import SnapshotStore
+from .storage import WorldStore, DEFAULT_SNAPSHOT_INTERVAL
 
 # --- Paths -------------------------------------------------------------------
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(ROOT, "static")
-# Data location can be overridden (e.g. to run a second, isolated instance).
-WORLDS_DIR = os.environ.get("EVANS_WORLDS_DIR") or os.path.join(ROOT, "data", "worlds")
-LEGACY_PATH = os.environ.get("EVANS_LEGACY_PATH") or os.path.join(ROOT, "data", "world.json")
+# Everything persistent lives under one data root, overridable so tests (and a
+# second isolated instance) never touch the real worlds. Individual paths can
+# still be overridden on their own for backwards compatibility.
+DATA_DIR = os.environ.get("EVANS_DATA_DIR") or os.path.join(ROOT, "data")
+WORLDS_DIR = os.environ.get("EVANS_WORLDS_DIR") or os.path.join(DATA_DIR, "worlds")
+SNAP_DIR = os.environ.get("EVANS_SNAPSHOTS_DIR") or os.path.join(DATA_DIR, "snapshots")
+USERS_PATH = os.environ.get("EVANS_USERS_PATH") or os.path.join(DATA_DIR, "users.json")
+SESSIONS_PATH = os.environ.get("EVANS_SESSIONS_PATH") or os.path.join(DATA_DIR, "sessions.json")
+LEGACY_PATH = os.environ.get("EVANS_LEGACY_PATH") or os.path.join(DATA_DIR, "world.json")
+SNAP_INTERVAL = int(os.environ.get("EVANS_SNAPSHOT_INTERVAL", DEFAULT_SNAPSHOT_INTERVAL))
 
-store = WorldStore(WORLDS_DIR, legacy_path=LEGACY_PATH)
+snapshots = SnapshotStore(SNAP_DIR)
+store = WorldStore(WORLDS_DIR, legacy_path=LEGACY_PATH,
+                   snapshots=snapshots, snapshot_interval=SNAP_INTERVAL)
+users = UserStore(USERS_PATH)
+sessions = SessionStore(SESSIONS_PATH)
+
+COOKIE = "evans_session"
+SESSION_TTL = 30 * 24 * 3600
+GUEST_USERNAME = "guest"
 
 # One generator per seed (deterministic, cheap to keep around).
 _generators: dict[int, worldgen.WorldGenerator] = {}
@@ -44,6 +61,42 @@ def gen_for(seed: int) -> worldgen.WorldGenerator:
 
 
 app = FastAPI(title="EvansGame")
+
+
+# --- Auth helpers ------------------------------------------------------------
+def current_user(request: Request) -> dict | None:
+    uid = sessions.resolve(request.cookies.get(COOKIE))
+    return users.get(uid) if uid else None
+
+
+def require_user(request: Request) -> dict:
+    u = current_user(request)
+    if not u:
+        raise HTTPException(401, "login required")
+    return u
+
+
+def _set_session_cookie(response: Response, request: Request, token: str):
+    response.set_cookie(
+        COOKIE, token, max_age=SESSION_TTL, httponly=True,
+        samesite="lax", secure=(request.url.scheme == "https"), path="/")
+
+
+def _visible(w: dict, uid: str | None) -> bool:
+    """Can this user see / play this world?"""
+    return w.get("public", True) or w.get("owner") == uid
+
+
+def _is_owner(w: dict, uid: str | None) -> bool:
+    return w.get("owner") is not None and w.get("owner") == uid
+
+
+def _ensure_guest() -> dict:
+    import secrets
+    u = users.by_username(GUEST_USERNAME)
+    if not u:
+        u = users.create(GUEST_USERNAME, secrets.token_urlsafe(12), color=DEFAULT_COLORS[2])
+    return u
 
 
 # --- Models ------------------------------------------------------------------
@@ -75,6 +128,31 @@ class RenameWorld(BaseModel):
     name: str
 
 
+class Visibility(BaseModel):
+    public: bool
+
+
+class Revert(BaseModel):
+    snapshotId: str
+
+
+class Register(BaseModel):
+    username: str
+    password: str
+    color: int | None = None
+
+
+class Login(BaseModel):
+    username: str
+    password: str
+
+
+class Profile(BaseModel):
+    name: str | None = None
+    color: int | None = None
+    newPassword: str | None = None
+
+
 def world_or_404(wid: str) -> dict:
     w = store.get(wid)
     if not w:
@@ -82,40 +160,168 @@ def world_or_404(wid: str) -> dict:
     return w
 
 
-# --- World management --------------------------------------------------------
-@app.get("/api/worlds")
-def list_worlds():
-    return {"worlds": store.list_worlds()}
+def access_or_error(request: Request, wid: str) -> tuple[dict, dict]:
+    """Common gate for per-world play endpoints: must be logged in and able to see
+    the world. Returns (user, world)."""
+    u = require_user(request)
+    w = world_or_404(wid)
+    if not _visible(w, u["uid"]):
+        raise HTTPException(403, "this world is private")
+    return u, w
 
 
-@app.post("/api/worlds")
-def create_world(body: NewWorld):
-    return {"world": store.summary(store.create(body.name))}
+# --- Auth --------------------------------------------------------------------
+@app.post("/api/auth/register")
+def auth_register(body: Register, request: Request, response: Response):
+    try:
+        user = users.create(body.username, body.password, color=body.color)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _set_session_cookie(response, request, sessions.new(user["uid"]))
+    return {"user": UserStore.public(user)}
 
 
-@app.post("/api/worlds/{wid}/rename")
-def rename_world(wid: str, body: RenameWorld):
-    if not store.rename(wid, body.name):
-        raise HTTPException(404, "world not found")
+@app.post("/api/auth/login")
+def auth_login(body: Login, request: Request, response: Response):
+    user = users.verify(body.username, body.password)
+    if not user:
+        raise HTTPException(401, "wrong username or password")
+    _set_session_cookie(response, request, sessions.new(user["uid"]))
+    return {"user": UserStore.public(user)}
+
+
+@app.post("/api/auth/guest")
+def auth_guest(request: Request, response: Response):
+    """Issue a session for a shared guest account — used by ?demo / kiosk mode so
+    it can skip the login screen."""
+    user = _ensure_guest()
+    _set_session_cookie(response, request, sessions.new(user["uid"]))
+    return {"user": UserStore.public(user)}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response):
+    sessions.drop(request.cookies.get(COOKIE))
+    response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
 
 
+@app.get("/api/users")
+def list_users():
+    """Accounts available on the sign-in picker (no guest, no password data)."""
+    return {"users": users.list_public(exclude={GUEST_USERNAME})}
+
+
+@app.get("/api/me")
+def whoami(request: Request):
+    return {"user": UserStore.public(require_user(request))}
+
+
+@app.post("/api/profile")
+def update_profile(body: Profile, request: Request):
+    u = require_user(request)
+    try:
+        updated = users.update_profile(u["uid"], name=body.name, color=body.color,
+                                       new_password=body.newPassword)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"user": UserStore.public(updated)}
+
+
+# --- World management --------------------------------------------------------
+@app.get("/api/worlds")
+def list_worlds(request: Request):
+    u = require_user(request)
+    return {"worlds": store.list_worlds(u["uid"])}
+
+
+@app.post("/api/worlds")
+def create_world(body: NewWorld, request: Request):
+    u = require_user(request)
+    w = store.create(body.name, owner=u["uid"], owner_name=u["name"])
+    return {"world": store.summary(w, u["uid"])}
+
+
+@app.post("/api/worlds/{wid}/rename")
+def rename_world(wid: str, body: RenameWorld, request: Request):
+    u = require_user(request)
+    w = world_or_404(wid)
+    if not _is_owner(w, u["uid"]):
+        raise HTTPException(403, "only the owner can rename this world")
+    store.rename(wid, body.name)
+    return {"ok": True}
+
+
+@app.post("/api/worlds/{wid}/claim")
+def claim_world(wid: str, request: Request):
+    u = require_user(request)
+    w = world_or_404(wid)
+    if w.get("owner") is not None:
+        raise HTTPException(409, "world already claimed")
+    store.set_owner(wid, u["uid"], u["name"])
+    return {"ok": True}
+
+
+@app.post("/api/worlds/{wid}/visibility")
+def set_visibility(wid: str, body: Visibility, request: Request):
+    u = require_user(request)
+    w = world_or_404(wid)
+    if not _is_owner(w, u["uid"]):
+        raise HTTPException(403, "only the owner can change visibility")
+    store.set_public(wid, body.public)
+    return {"ok": True, "public": body.public}
+
+
 @app.delete("/api/worlds/{wid}")
-def delete_world(wid: str):
+def delete_world(wid: str, request: Request):
+    u = require_user(request)
+    w = world_or_404(wid)
+    if not _is_owner(w, u["uid"]):
+        raise HTTPException(403, "only the owner can delete this world")
     store.delete(wid)
+    return {"ok": True}
+
+
+# --- Snapshots / revert ------------------------------------------------------
+@app.get("/api/worlds/{wid}/snapshots")
+def list_snapshots(wid: str, request: Request):
+    u, w = access_or_error(request, wid)
+    return {"snapshots": snapshots.list(wid), "canRevert": _is_owner(w, u["uid"])}
+
+
+@app.post("/api/worlds/{wid}/revert")
+async def revert_world(wid: str, body: Revert, request: Request):
+    u = require_user(request)
+    w = world_or_404(wid)
+    if not _is_owner(w, u["uid"]):
+        raise HTTPException(403, "only the owner can rewind this world")
+    snap = snapshots.get(wid, body.snapshotId)
+    if not snap:
+        raise HTTPException(404, "snapshot not found")
+    _reverting.add(wid)
+    try:
+        store.snapshot_now(wid, label="before rewind")     # so a rewind is undoable
+        store.apply_state(wid, snap["edits"], snap.get("player"))
+        await _kick_room(wid)                               # boot everyone out
+    finally:
+        _reverting.discard(wid)
     return {"ok": True}
 
 
 # --- Per-world play ----------------------------------------------------------
 @app.get("/api/worlds/{wid}/config")
-def world_config(wid: str):
-    w = world_or_404(wid)
+def world_config(wid: str, request: Request):
+    u, w = access_or_error(request, wid)
     spawn_h = gen_for(w["seed"]).height_at(0, 0)
     store.touch(wid)
     return {
         "id": w["id"],
         "name": w["name"],
         "seed": w["seed"],
+        "owner": w.get("owner"),
+        "ownerName": w.get("ownerName", ""),
+        "public": w.get("public", True),
+        "mine": _is_owner(w, u["uid"]),
         "chunkX": worldgen.CHUNK_X,
         "chunkZ": worldgen.CHUNK_Z,
         "worldY": worldgen.WORLD_Y,
@@ -126,8 +332,8 @@ def world_config(wid: str):
 
 
 @app.get("/api/worlds/{wid}/chunk/{cx}/{cz}")
-def world_chunk(wid: str, cx: int, cz: int):
-    w = world_or_404(wid)
+def world_chunk(wid: str, cx: int, cz: int, request: Request):
+    _, w = access_or_error(request, wid)
     blocks = gen_for(w["seed"]).generate_chunk(cx, cz)
     edits = store.edits_in_chunk(
         wid, cx, cz, worldgen.CHUNK_X, worldgen.CHUNK_Z, worldgen.WORLD_Y)
@@ -138,8 +344,8 @@ def world_chunk(wid: str, cx: int, cz: int):
 
 
 @app.post("/api/worlds/{wid}/edit")
-def world_edit(wid: str, edit: Edit):
-    world_or_404(wid)
+def world_edit(wid: str, edit: Edit, request: Request):
+    access_or_error(request, wid)
     if not (0 <= edit.y < worldgen.WORLD_Y):
         raise HTTPException(400, "y out of range")
     if not (0 <= edit.block < 256):
@@ -149,8 +355,8 @@ def world_edit(wid: str, edit: Edit):
 
 
 @app.post("/api/worlds/{wid}/edits")
-def world_edits(wid: str, payload: Edits):
-    world_or_404(wid)
+def world_edits(wid: str, payload: Edits, request: Request):
+    access_or_error(request, wid)
     items = [(e.x, e.y, e.z, e.block) for e in payload.edits
              if 0 <= e.y < worldgen.WORLD_Y and 0 <= e.block < 256]
     store.set_blocks(wid, items)
@@ -158,8 +364,8 @@ def world_edits(wid: str, payload: Edits):
 
 
 @app.post("/api/worlds/{wid}/player")
-def world_player(wid: str, state: PlayerState):
-    world_or_404(wid)
+def world_player(wid: str, state: PlayerState, request: Request):
+    access_or_error(request, wid)
     store.set_player(wid, state.model_dump())
     return {"ok": True}
 
@@ -169,6 +375,7 @@ def world_player(wid: str, state: PlayerState):
 # updates and block edits between everyone in the same world, and persists the
 # edits so they survive restarts. Designed for LAN play (a handful of players).
 _rooms: dict[str, dict] = {}            # wid -> { websocket: state }
+_reverting: set[str] = set()            # worlds mid-rewind (reject joins briefly)
 _pid_counter = itertools.count(1)
 
 
@@ -182,20 +389,50 @@ async def _broadcast(room: dict, sender, msg: dict):
             pass
 
 
+async def _kick_room(wid: str):
+    """Force every client in a world back to the menu (used by revert)."""
+    room = _rooms.get(wid) or {}
+    for ws in list(room.keys()):
+        try:
+            await ws.send_json({"type": "reverted"})
+        except Exception:
+            pass
+        try:
+            await ws.close(code=4005)
+        except Exception:
+            pass
+    _rooms.pop(wid, None)
+
+
 @app.websocket("/api/worlds/{wid}/ws")
 async def world_ws(ws: WebSocket, wid: str):
-    if not store.get(wid):
-        await ws.close(code=4004)
+    # Authenticate from the session cookie (WebSockets send cookies too).
+    uid = sessions.resolve(ws.cookies.get(COOKIE))
+    user = users.get(uid) if uid else None
+    if not user:
+        await ws.close(code=4401)                # not logged in
         return
+    w = store.get(wid)
+    if not w:
+        await ws.close(code=4004)                # no such world
+        return
+    if not _visible(w, uid):
+        await ws.close(code=4403)                # private world, not yours
+        return
+    if wid in _reverting:
+        await ws.close(code=4005)                # world is being restored
+        return
+
     await ws.accept()
     pid = next(_pid_counter)
     room = _rooms.setdefault(wid, {})
-    state = {"id": pid, "name": f"Player{pid}", "pos": None}
+    color = user.get("color", DEFAULT_COLORS[0])
+    state = {"id": pid, "name": user["name"], "color": color, "pos": None}
 
     # Tell the newcomer who's already here, then add them to the room.
-    existing = [{"id": s["id"], "name": s["name"], "pos": s["pos"]}
+    existing = [{"id": s["id"], "name": s["name"], "color": s.get("color"), "pos": s["pos"]}
                 for s in room.values() if s["pos"] is not None]
-    await ws.send_json({"type": "welcome", "id": pid, "players": existing})
+    await ws.send_json({"type": "welcome", "id": pid, "color": color, "players": existing})
     room[ws] = state
 
     try:
@@ -206,9 +443,9 @@ async def world_ws(ws: WebSocket, wid: str):
                 state["pos"] = {k: msg.get(k, 0) for k in ("x", "y", "z", "yaw", "pitch")}
                 await _broadcast(room, ws, {"type": "pos", "id": pid, **state["pos"]})
             elif t == "hello":
-                state["name"] = str(msg.get("name") or state["name"])[:24]
-                await _broadcast(room, ws, {"type": "join", "id": pid,
-                                            "name": state["name"], "pos": state["pos"]})
+                # Identity is server-authoritative now; just announce the join.
+                await _broadcast(room, ws, {"type": "join", "id": pid, "name": state["name"],
+                                            "color": state["color"], "pos": state["pos"]})
             elif t == "edit":
                 store.set_block(wid, msg["x"], msg["y"], msg["z"], msg["block"])
                 await _broadcast(room, ws, {"type": "edit", "x": msg["x"], "y": msg["y"],
@@ -228,10 +465,10 @@ async def world_ws(ws: WebSocket, wid: str):
                 if target is None:
                     await _broadcast(room, ws, out)
                 else:
-                    for w, st in list(room.items()):
+                    for w2, st in list(room.items()):
                         if st["id"] == target:
                             try:
-                                await w.send_json(out)
+                                await w2.send_json(out)
                             except Exception:
                                 pass
                             break
@@ -242,6 +479,10 @@ async def world_ws(ws: WebSocket, wid: str):
         await _broadcast(room, None, {"type": "leave", "id": pid})
         if not room:
             _rooms.pop(wid, None)
+            # Last player left — capture the session's final state (unless we got
+            # here because of a revert, which already just snapshotted).
+            if wid not in _reverting:
+                store.snapshot_now(wid, label="session end")
 
 
 # --- Health / assets ---------------------------------------------------------

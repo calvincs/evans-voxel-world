@@ -8,6 +8,7 @@ export class Net {
     this.name = name;
     this.connected = false;
     this.myId = null;
+    this.myColor = null;         // filled in from the server's welcome
     this.onDown = null;          // called when the socket drops (fast disconnect signal)
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     this.url = `${proto}://${location.host}/api/worlds/${worldId}/ws`;
@@ -49,7 +50,8 @@ export class Net {
   _dispatch(m) {
     const h = this.handlers;
     switch (m.type) {
-      case 'welcome': this.myId = m.id; h.onWelcome && h.onWelcome(m.id, m.players || []); break;
+      case 'welcome': this.myId = m.id; this.myColor = m.color;
+        h.onWelcome && h.onWelcome(m.id, m.players || []); break;
       case 'join':    h.onJoin && h.onJoin(m); break;
       case 'leave':   h.onLeave && h.onLeave(m.id); break;
       case 'pos':     h.onPos && h.onPos(m); break;
@@ -57,6 +59,7 @@ export class Net {
       case 'edits':   h.onEdits && h.onEdits(m.edits || []); break;
       case 'fx':      h.onFx && h.onFx(m); break;
       case 'voice':   h.onVoice && h.onVoice(m); break;
+      case 'reverted': h.onReverted && h.onReverted(); break;
     }
   }
 

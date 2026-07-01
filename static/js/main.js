@@ -22,17 +22,212 @@ import {
 const $ = (id) => document.getElementById(id);
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 
-function playerName() {
-  const el = $('player-name');
-  let name = (el && el.value.trim()) || localStorage.getItem('evanName') || '';
-  if (!name) name = 'Player' + Math.floor(10 + Math.random() * 90);
-  localStorage.setItem('evanName', name);
-  return name.slice(0, 20);
+// The signed-in user: { uid, username, name, color }. Set by the auth flow.
+let currentUser = null;
+
+// Character colour palette (mirrors accounts.DEFAULT_COLORS on the server).
+const COLOR_PALETTE = [
+  0x3aa657, 0xff6b6b, 0x4db6ff, 0xffd24d, 0xb084ff, 0x55d98a, 0xff9f40, 0xff7ad9,
+];
+const hex = (c) => '#' + (Number(c) >>> 0).toString(16).padStart(6, '0');
+
+// Small JSON request helper that surfaces HTTP errors (with FastAPI's `detail`).
+async function req(method, url, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  let res, data = null;
+  try {
+    res = await fetch(url, opts);
+    try { data = await res.json(); } catch (_) {}
+  } catch (_) {
+    return { ok: false, status: 0, data: null };
+  }
+  return { ok: res.ok, status: res.status, data };
 }
-const jpost = (url, body) => fetch(url, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body || {}),
-}).then((r) => r.json());
+
+async function fetchMe() {
+  const { ok, data } = await req('GET', '/api/me');
+  return ok && data ? data.user : null;
+}
+
+// --- Sign in / create account ------------------------------------------------
+function buildSwatches(container, initial, onPick) {
+  container.innerHTML = '';
+  COLOR_PALETTE.forEach((c) => {
+    const sw = document.createElement('div');
+    sw.className = 'swatch' + (c === initial ? ' sel' : '');
+    sw.style.background = hex(c);
+    sw.onclick = () => {
+      container.querySelectorAll('.swatch').forEach((s) => s.classList.remove('sel'));
+      sw.classList.add('sel');
+      onPick(c);
+    };
+    container.appendChild(sw);
+  });
+}
+
+// Show the auth panel and resolve with the user once they sign in / register.
+async function showAuth() {
+  // Existing accounts populate the sign-in picker so kids just pick their name.
+  const accountsRes = await req('GET', '/api/users');
+  const accounts = (accountsRes.data && accountsRes.data.users) || [];
+
+  return new Promise((resolve) => {
+    const auth = $('auth');
+    const tabLogin = $('tab-login'), tabReg = $('tab-register');
+    const pickRow = $('auth-pick-row'), select = $('auth-select'), dot = $('auth-dot');
+    const userEl = $('auth-user'), passEl = $('auth-pass');
+    const colorRow = $('auth-color-row'), submit = $('auth-submit'), err = $('auth-error');
+    let mode = 'login';
+    let color = COLOR_PALETTE[0];
+    buildSwatches($('auth-colors'), color, (c) => { color = c; });
+
+    // Fill the account picker (option value = username, label = display name).
+    select.innerHTML = '';
+    for (const a of accounts) {
+      const opt = document.createElement('option');
+      opt.value = a.username; opt.textContent = a.name;
+      opt.dataset.color = a.color;
+      select.appendChild(opt);
+    }
+    const syncDot = () => {
+      const opt = select.selectedOptions[0];
+      dot.style.background = hex(opt ? opt.dataset.color : COLOR_PALETTE[0]);
+    };
+    select.onchange = syncDot;
+    syncDot();
+
+    const hasAccounts = accounts.length > 0;
+    tabLogin.disabled = !hasAccounts;
+    tabLogin.title = hasAccounts ? '' : 'No accounts yet — create one first';
+
+    const setMode = (m) => {
+      if (m === 'login' && !hasAccounts) m = 'register';    // nothing to sign into yet
+      mode = m;
+      tabLogin.classList.toggle('active', m === 'login');
+      tabReg.classList.toggle('active', m === 'register');
+      // Sign in = account picker; Create account = free-text username + colour.
+      pickRow.classList.toggle('hidden', m !== 'login');
+      userEl.classList.toggle('hidden', m !== 'register');
+      colorRow.classList.toggle('hidden', m !== 'register');
+      submit.textContent = m === 'register' ? 'Create account ▶' : 'Sign in ▶';
+      err.textContent = '';
+    };
+    tabLogin.onclick = () => setMode('login');
+    tabReg.onclick = () => setMode('register');
+
+    const doSubmit = async () => {
+      const username = mode === 'login' ? select.value : userEl.value.trim();
+      const password = passEl.value;
+      if (!username) { err.textContent = 'Pick an account or create one.'; return; }
+      if (!password) { err.textContent = 'Enter your password.'; return; }
+      submit.disabled = true;
+      const url = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      const body = mode === 'register' ? { username, password, color } : { username, password };
+      const { ok, data } = await req('POST', url, body);
+      submit.disabled = false;
+      if (ok && data) { auth.classList.add('hidden'); resolve(data.user); }
+      else err.textContent = (data && data.detail) || 'Something went wrong — try again.';
+    };
+    submit.onclick = doSubmit;
+    userEl.onkeydown = (e) => { if (e.key === 'Enter') passEl.focus(); };
+    passEl.onkeydown = (e) => { if (e.key === 'Enter') doSubmit(); };
+
+    setMode(hasAccounts ? 'login' : 'register');
+    auth.classList.remove('hidden');
+    (hasAccounts ? passEl : userEl).focus();
+  });
+}
+
+async function ensureLoggedIn() {
+  currentUser = await fetchMe();
+  if (!currentUser) currentUser = await showAuth();
+  return currentUser;
+}
+
+// --- Profile editor ----------------------------------------------------------
+function renderWho() {
+  if (!currentUser) return;
+  const dot = $('who-dot'), name = $('who-name');
+  if (dot) dot.style.background = hex(currentUser.color);
+  if (name) name.textContent = currentUser.name;
+}
+
+function openProfile() {
+  const panel = $('profile');
+  const nameEl = $('prof-name'), passEl = $('prof-pass'), err = $('prof-error');
+  let color = currentUser.color;
+  nameEl.value = currentUser.name || '';
+  passEl.value = '';
+  err.textContent = '';
+  buildSwatches($('prof-colors'), color, (c) => { color = c; });
+  panel.classList.remove('hidden');
+  $('prof-cancel').onclick = () => panel.classList.add('hidden');
+  $('prof-save').onclick = async () => {
+    const body = { name: nameEl.value.trim() || currentUser.name, color };
+    if (passEl.value) body.newPassword = passEl.value;
+    const { ok, data } = await req('POST', '/api/profile', body);
+    if (ok && data) { currentUser = data.user; panel.classList.add('hidden'); renderWho(); }
+    else err.textContent = (data && data.detail) || 'Could not save.';
+  };
+}
+
+// --- World history / rewind --------------------------------------------------
+function fullTime(ts) {
+  try { return new Date(ts * 1000).toLocaleString(); } catch (_) { return ''; }
+}
+
+async function openHistory(wid, name) {
+  const panel = $('history'), listEl = $('hist-list');
+  $('hist-title').textContent = 'Snapshots — ' + name;
+  $('hist-close').onclick = () => panel.classList.add('hidden');
+  panel.classList.remove('hidden');
+  listEl.innerHTML = '<p class="loading">Loading…</p>';
+  const { data } = await req('GET', `/api/worlds/${wid}/snapshots`);
+  const snaps = (data && data.snapshots) || [];
+  const canRevert = !!(data && data.canRevert);
+  listEl.innerHTML = '';
+  if (!snaps.length) {
+    listEl.innerHTML = '<p class="empty">No snapshots yet — they’re captured automatically as you play.</p>';
+    return;
+  }
+  for (const s of snaps) {
+    const row = document.createElement('div'); row.className = 'hist-row';
+    const info = document.createElement('div'); info.className = 'hist-info';
+    const when = document.createElement('span'); when.className = 'hist-when';
+    when.textContent = timeAgo(s.ts); info.appendChild(when);
+    const meta = document.createElement('span'); meta.className = 'hist-meta';
+    meta.textContent = `${s.editCount} edit${s.editCount === 1 ? '' : 's'}`
+      + (s.label ? ` · ${s.label}` : '') + ` · ${fullTime(s.ts)}`;
+    info.appendChild(meta); row.appendChild(info);
+    if (canRevert) {
+      const btn = document.createElement('button'); btn.className = 'hist-revert';
+      btn.textContent = '⤺ Rewind here';
+      btn.onclick = async () => {
+        if (!confirm(`Rewind "${name}" to ${timeAgo(s.ts)}?\n\n`
+          + `Everyone in the world will be sent back to the menu, and any edits made `
+          + `after this point will be removed. A backup of the current state is saved first, `
+          + `so you can undo this.`)) return;
+        btn.disabled = true; btn.textContent = 'Rewinding…';
+        const { ok } = await req('POST', `/api/worlds/${wid}/revert`, { snapshotId: s.id });
+        if (ok) { panel.classList.add('hidden'); toast('⤺ World rewound to ' + timeAgo(s.ts), 4000); }
+        else { btn.disabled = false; btn.textContent = '⤺ Rewind here'; toast('Could not rewind.', 3000); }
+      };
+      row.appendChild(btn);
+    }
+    listEl.appendChild(row);
+  }
+}
+
+function badge(cls, text) {
+  const b = document.createElement('span');
+  b.className = 'badge' + (cls ? ' ' + cls : '');
+  b.textContent = text;
+  return b;
+}
 
 // --- Connection monitor ------------------------------------------------------
 // Polls the server's health. If it goes away we freeze the game and show a
@@ -93,18 +288,23 @@ async function main() {
   try { assets = await (await fetch('/api/assets')).json(); } catch (_) {}
   audio.prefetchOverrides(assets.audio);
 
-  // Demo / kiosk: skip the menu, jump into a world. ?demo&w=<id> targets a
-  // specific world; otherwise the most recent (or a fresh "Demo").
+  // Demo / kiosk: skip the login screen with a shared guest account, then jump
+  // into a world. ?demo&w=<id> targets a specific world; otherwise the most
+  // recent (or a fresh "Demo").
   const params = new URLSearchParams(location.search);
   if (params.has('demo')) {
+    await req('POST', '/api/auth/guest');       // guest session so world APIs work
+    currentUser = await fetchMe();
     let id = params.get('w');
     if (!id) {
-      const { worlds } = await (await fetch('/api/worlds')).json();
-      id = worlds[0]?.id || (await jpost('/api/worlds', { name: 'Demo' })).world.id;
+      const { data } = await req('GET', '/api/worlds');
+      id = (data && data.worlds && data.worlds[0]?.id)
+        || (await req('POST', '/api/worlds', { name: 'Demo' })).data.world.id;
     }
     return startGame(id, true);
   }
 
+  await ensureLoggedIn();                        // gate: sign in / create account
   const worldId = await chooseWorld();
   startGame(worldId, false);
 }
@@ -116,20 +316,21 @@ function chooseWorld() {
     const list = $('world-list');
     const nameInput = $('world-name');
 
-    const pn = $('player-name');                 // remember the player's name
-    pn.value = localStorage.getItem('evanName') || '';
-    pn.oninput = () => localStorage.setItem('evanName', pn.value.trim());
+    renderWho();
+    $('profile-open').onclick = openProfile;
+    $('logout').onclick = async () => { await req('POST', '/api/auth/logout'); location.reload(); };
 
     const create = async () => {
       const name = nameInput.value.trim();
-      const { world } = await jpost('/api/worlds', { name: name || 'New World' });
-      resolve(world.id);
+      const { data } = await req('POST', '/api/worlds', { name: name || 'New World' });
+      if (data && data.world) resolve(data.world.id);
     };
     $('create-world').onclick = create;
     nameInput.onkeydown = (e) => { if (e.key === 'Enter') create(); };
 
     const refresh = async () => {
-      const { worlds } = await (await fetch('/api/worlds')).json();
+      const { data } = await req('GET', '/api/worlds');
+      const worlds = (data && data.worlds) || [];
       list.innerHTML = '';
       if (worlds.length === 0) {
         list.innerHTML = '<p class="empty">No worlds yet — name one and hit Create!</p>';
@@ -139,24 +340,69 @@ function chooseWorld() {
       for (const w of worlds) {
         const row = document.createElement('div');
         row.className = 'world-row';
-        row.innerHTML =
-          `<div class="world-info">
-             <span class="world-name"></span>
-             <span class="world-meta">${w.edits} edit${w.edits === 1 ? '' : 's'} · ${timeAgo(w.lastPlayed)}</span>
-           </div>
-           <button class="world-play">Play ▶</button>
-           <button class="world-del" title="Delete world">🗑</button>`;
-        row.querySelector('.world-name').textContent = w.name;
-        const go = () => resolve(w.id);
-        row.querySelector('.world-info').onclick = go;
-        row.querySelector('.world-play').onclick = go;
-        row.querySelector('.world-del').onclick = async (e) => {
-          e.stopPropagation();
-          if (confirm(`Delete "${w.name}"? This can't be undone.`)) {
-            await fetch(`/api/worlds/${w.id}`, { method: 'DELETE' });
+
+        const info = document.createElement('div');
+        info.className = 'world-info';
+        const nm = document.createElement('span');
+        nm.className = 'world-name'; nm.textContent = w.name;
+        info.appendChild(nm);
+        const badges = document.createElement('div');
+        badges.className = 'world-badges';
+        badges.appendChild(badge(w.public ? 'public' : 'private',
+          w.public ? '🌐 Public' : '🔒 Private'));
+        if (w.mine) badges.appendChild(badge('mine', '★ Yours'));
+        else if (w.unclaimed) badges.appendChild(badge('unclaimed', 'Unclaimed'));
+        else if (w.ownerName) badges.appendChild(badge('', 'by ' + w.ownerName));
+        info.appendChild(badges);
+        const meta = document.createElement('span');
+        meta.className = 'world-meta';
+        meta.textContent = `${w.edits} edit${w.edits === 1 ? '' : 's'} · ${timeAgo(w.lastPlayed)}`;
+        info.appendChild(meta);
+        info.onclick = () => resolve(w.id);
+        row.appendChild(info);
+
+        const play = document.createElement('button');
+        play.className = 'world-play'; play.textContent = 'Play ▶';
+        play.onclick = (e) => { e.stopPropagation(); resolve(w.id); };
+        row.appendChild(play);
+
+        if (w.mine) {
+          const hist = document.createElement('button');
+          hist.className = 'world-hist'; hist.title = 'Snapshots / rewind'; hist.textContent = '⏱';
+          hist.onclick = (e) => { e.stopPropagation(); openHistory(w.id, w.name); };
+          row.appendChild(hist);
+
+          const vis = document.createElement('button');
+          vis.className = 'world-hist';
+          vis.title = w.public ? 'Make private' : 'Make public';
+          vis.textContent = w.public ? '🌐' : '🔒';
+          vis.onclick = async (e) => {
+            e.stopPropagation();
+            await req('POST', `/api/worlds/${w.id}/visibility`, { public: !w.public });
             refresh();
-          }
-        };
+          };
+          row.appendChild(vis);
+
+          const del = document.createElement('button');
+          del.className = 'world-del'; del.title = 'Delete world'; del.textContent = '🗑';
+          del.onclick = async (e) => {
+            e.stopPropagation();
+            if (confirm(`Delete "${w.name}"? This can't be undone.`)) {
+              await req('DELETE', `/api/worlds/${w.id}`);
+              refresh();
+            }
+          };
+          row.appendChild(del);
+        } else if (w.unclaimed) {
+          const claim = document.createElement('button');
+          claim.className = 'world-claim'; claim.title = 'Become the owner'; claim.textContent = 'Claim';
+          claim.onclick = async (e) => {
+            e.stopPropagation();
+            await req('POST', `/api/worlds/${w.id}/claim`);
+            refresh();
+          };
+          row.appendChild(claim);
+        }
         list.appendChild(row);
       }
     };
@@ -185,7 +431,8 @@ async function startGame(worldId, demo) {
 
   const world = new World(scene, atlas, worldId);
   const spawn = cfg.player || cfg.spawn;
-  const player = new Player(camera, world, scene, canvas, spawn);
+  const myColor = currentUser ? currentUser.color : 0x3aa657;
+  const player = new Player(camera, world, scene, canvas, spawn, myColor);
   player.mobile = isTouch;
   player.onBreakPlace = () => flashCrosshair();
   // Camera shake from an explosion, scaled by how close it was.
@@ -203,7 +450,7 @@ async function startGame(worldId, demo) {
 
   // Multiplayer: stream our position and apply others' edits + movements.
   const remotes = new RemotePlayers(scene);
-  const myName = playerName();
+  const myName = currentUser ? currentUser.name : 'Player';
   const roster = new Map();       // id -> { name }
   const voiceIds = new Set();     // ids currently in voice
   const rosterEls = new Map();    // id -> roster row element (for speaking highlight)
@@ -235,6 +482,14 @@ async function startGame(worldId, demo) {
       }
     },
     onVoice: (m) => voice.handle(m),
+    onReverted: () => {
+      // The owner rewound this world — freeze, tell the player, and return to
+      // the menu with the restored state loaded fresh on reload.
+      offline = true;                       // stop the loop / any further edits
+      if (document.pointerLockElement) document.exitPointerLock();
+      toast('⤺ This world was rewound to an earlier point — returning to the menu…', 3500);
+      setTimeout(() => location.reload(), 1600);
+    },
   });
   world.net = net;
   net.onDown = () => connectionCheckNow();   // socket dropped -> check the server now
@@ -357,9 +612,19 @@ async function startGame(worldId, demo) {
 
   // Swap the menu for the play screen.
   $('menu').classList.add('hidden');
+  document.body.classList.add('in-game');       // reveal the HUD / hotbar / controls
   const overlay = $('overlay');
   $('title').textContent = cfg.name;
   overlay.classList.remove('hidden');
+
+  // Owner-only "Snapshots" button on the pause screen (rewind this world).
+  const snapBtn = $('snapshots');
+  if (cfg.mine) {
+    snapBtn.classList.remove('hidden');
+    snapBtn.onclick = (e) => { e.stopPropagation(); openHistory(worldId, cfg.name); };
+  } else {
+    snapBtn.classList.add('hidden');
+  }
 
   const prevOnEngage = player.onEngage;
   player.onEngage = () => { overlay.classList.add('hidden'); if (prevOnEngage) prevOnEngage(); };

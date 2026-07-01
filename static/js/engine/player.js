@@ -25,7 +25,7 @@ function lookDir(yaw, pitch, out) {
 }
 
 export class Player {
-  constructor(camera, world, scene, dom, spawn) {
+  constructor(camera, world, scene, dom, spawn, color = 0x3aa657) {
     this.camera = camera;
     this.world = world;
     this.dom = dom;
@@ -49,7 +49,7 @@ export class Player {
 
     // Third-person view: 0 = first person, 1 = behind the character.
     this.view = 0;
-    this.character = new Character(scene, 0x3aa657);
+    this.character = new Character(scene, color);
     this.character.setVisible(false);
     this._dir = new THREE.Vector3();
     this._speed = 0;

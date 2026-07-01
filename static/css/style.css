@@ -442,6 +442,154 @@ html, body {
 }
 #create-world:hover { background: #1f5bc0; }
 
+/* In-game HUD + controls stay hidden on the sign-in / world menus; they only
+   appear once a world is actually being played (body.in-game, set in main.js). */
+body:not(.in-game) #hud,
+body:not(.in-game) #crosshair,
+body:not(.in-game) #hotbar,
+body:not(.in-game) #music,
+body:not(.in-game) #voice,
+body:not(.in-game) #bag,
+body:not(.in-game) #talk { display: none !important; }
+
+/* --- Auth / profile / history overlays ------------------------------------ */
+#auth, #profile, #history {
+  position: fixed;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 30, 50, 0.6);
+  backdrop-filter: blur(3px);
+}
+#auth.hidden, #profile.hidden, #history.hidden { display: none; }
+
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.tab {
+  flex: 1;
+  font: inherit; font-size: 15px; font-weight: bold;
+  padding: 8px 0; border: 2px solid #c3d4ee; border-radius: 10px;
+  background: transparent; color: #5a6b85; cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.tab.active { background: #2f6fd6; color: #fff; border-color: #2f6fd6; }
+.tab:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.auth-fields { display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.auth-fields input {
+  font: inherit; font-size: 16px;
+  padding: 9px 12px;
+  border: 2px solid #c3d4ee; border-radius: 10px;
+  background: #fff; color: #28303d; outline: none;
+}
+.auth-fields input:focus { border-color: #2f6fd6; }
+.auth-fields input.hidden, .login-row.hidden { display: none; }
+
+.login-row { display: flex; align-items: center; gap: 10px; }
+.auth-select {
+  flex: 1;
+  font: inherit; font-size: 16px;
+  padding: 9px 12px;
+  border: 2px solid #c3d4ee; border-radius: 10px;
+  background: #fff; color: #28303d; outline: none; cursor: pointer;
+}
+.auth-select:focus { border-color: #2f6fd6; }
+#auth-dot { width: 20px; height: 20px; }
+.field-label { font-size: 13px; font-weight: bold; color: #5a6b85; margin-top: 4px; }
+.field-label .hint, .hint { font-weight: normal; color: #93a1ba; }
+
+.color-row { margin-top: 4px; }
+.color-row.hidden { display: none; }
+.color-label { font-size: 13px; font-weight: bold; color: #5a6b85; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.swatch {
+  width: 30px; height: 30px; border-radius: 8px;
+  border: 3px solid transparent; cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.08s;
+}
+.swatch:hover { transform: scale(1.1); }
+.swatch.sel { border-color: #28303d; }
+
+.auth-error { color: #c2492f; font-size: 14px; min-height: 18px; margin: 10px 0 4px; }
+
+.primary-btn {
+  font: inherit; font-size: 20px; font-weight: bold;
+  padding: 11px 40px; border: none; border-radius: 12px;
+  background: #2f9f3c; color: #fff; cursor: pointer;
+  box-shadow: 0 4px 0 #237a2d;
+  transition: transform 0.08s, background 0.15s;
+  margin-top: 6px;
+}
+.primary-btn:hover { background: #36b545; }
+.primary-btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #237a2d; }
+.ghost-btn {
+  font: inherit; font-size: 13px;
+  padding: 6px 14px; border: 2px solid #c3d4ee; border-radius: 10px;
+  background: transparent; color: #5a6b85; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ghost-btn:hover { background: #e7eefb; color: #2f6fd6; }
+.ghost-btn.hidden { display: none; }
+
+/* Signed-in identity row on the world menu. */
+#who-row {
+  display: flex; align-items: center; gap: 8px;
+  margin: 2px 0 10px;
+  padding: 6px 10px;
+  background: #eef4ff; border-radius: 10px;
+}
+.who-dot { width: 16px; height: 16px; border-radius: 50%; background: #3aa657; flex: none; }
+#who-name { flex: 1; text-align: left; font-weight: bold; color: #28303d; font-size: 15px; }
+#who-row button {
+  font: inherit; font-size: 12px;
+  padding: 5px 10px; border: 2px solid #c3d4ee; border-radius: 9px;
+  background: #fff; color: #5a6b85; cursor: pointer;
+}
+#who-row button:hover { background: #e7eefb; color: #2f6fd6; }
+
+/* Ownership badges + owner-only controls on world rows. */
+.world-badges { display: flex; gap: 5px; margin-top: 3px; flex-wrap: wrap; }
+.badge {
+  font-size: 11px; font-weight: bold;
+  padding: 1px 7px; border-radius: 999px;
+  background: #e2e9f5; color: #5a6b85;
+}
+.badge.public { background: #dcefe0; color: #2f7a3c; }
+.badge.private { background: #f3e2d7; color: #a9642f; }
+.badge.mine { background: #dbe7ff; color: #2f5fd6; }
+.badge.unclaimed { background: #f6e6b8; color: #8a6d1f; }
+.world-hist, .world-claim {
+  font-size: 16px; line-height: 1; padding: 7px 8px;
+  border: none; border-radius: 9px; background: #e6ecf7;
+  color: #4a5b7c; cursor: pointer;
+}
+.world-hist:hover, .world-claim:hover { background: #d3ddf0; }
+.world-claim { font-size: 13px; font-weight: bold; }
+
+/* History / snapshot list. */
+.hist-hint { font-size: 13px; color: #6a7892; margin: -6px 0 12px; line-height: 1.5; }
+#hist-list {
+  max-height: 52vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;
+}
+#hist-list .empty, #hist-list .loading { color: #6a7892; font-size: 15px; padding: 10px; }
+.hist-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border: 2px solid #d6e2f5; border-radius: 12px; background: #f4f8ff;
+}
+.hist-info { flex: 1; text-align: left; }
+.hist-when { display: block; font-weight: bold; color: #28303d; font-size: 15px; }
+.hist-meta { display: block; font-size: 12px; color: #7c8aa3; }
+.hist-revert {
+  font: inherit; font-weight: bold; font-size: 13px;
+  padding: 7px 14px; border: none; border-radius: 9px;
+  background: #d98a2f; color: #fff; cursor: pointer; box-shadow: 0 3px 0 #a9642f;
+}
+.hist-revert:hover { background: #e59a3f; }
+.hist-revert:active { transform: translateY(2px); box-shadow: 0 1px 0 #a9642f; }
+
 /* --- Touch controls (phones / tablets) ------------------------------------ */
 #touch { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
 #touch.hidden { display: none; }

@@ -24,7 +24,7 @@ export class RemotePlayers {
     const y = p.y ?? (p.pos && p.pos.y) ?? 0;
     const z = p.z ?? (p.pos && p.pos.z) ?? 0;
     const yaw = p.yaw ?? (p.pos && p.pos.yaw) ?? 0;
-    const ch = new Character(this.scene, this._color(p.id));
+    const ch = new Character(this.scene, (p.color != null) ? p.color : this._color(p.id));
     ch.setLabel(p.name || `Player${p.id}`);
     ch.setTransform(x, y, z, yaw);
     this.players.set(p.id, {
