@@ -399,6 +399,12 @@ export class World {
         }).catch(() => {});
       }
     }
+    // An underwater crater fills back in: reflood any cleared cell below sea
+    // level that touches water. The first one that connects floods the rest, so
+    // the repeated calls on already-filled cells are cheap no-ops.
+    for (const cell of removed) {
+      if (cell.y <= DIM.water) this._floodWater(cell.x, cell.y, cell.z);
+    }
   }
 
   _spawnParticles(x, y, z, opts = {}) {
