@@ -17,6 +17,26 @@ const TYPE_KEYS = Object.keys(TYPES);
 const GRAVITY = 24, TURN = 2.2;
 const MAX_MOBS = 8, SPAWN_MIN = 12, SPAWN_MAX = 26, DESPAWN = 42;
 
+// Optional AI-generated skins live at /static/textures/mob_<type>.png. When one
+// exists it's loaded once and shared by every mob of that type; otherwise the
+// mob keeps its flat colours, so no art is required. `loadMobSkins` is handed
+// the list of available texture names (from /api/assets) to avoid 404 probes.
+const SKIN = {};   // type -> THREE.Texture
+export function loadMobSkins(available = []) {
+  const have = new Set(available);
+  const loader = new THREE.TextureLoader();
+  for (const type of TYPE_KEYS) {
+    const name = `mob_${type}`;
+    if (SKIN[type] || !have.has(name)) continue;
+    const tex = loader.load(`/static/textures/${name}.png`);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.generateMipmaps = false;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    SKIN[type] = tex;
+  }
+}
+
 class Mob {
   constructor(scene, type, x, y, z) {
     this.scene = scene;
@@ -31,16 +51,24 @@ class Mob {
     this.phase = 0;
 
     this.group = new THREE.Group();
+    const skin = SKIN[type];
     const bodyCol = new THREE.Color(t.body);
     const legCol = bodyCol.clone().multiplyScalar(0.8);
 
-    const body = new THREE.Mesh(new THREE.BoxGeometry(t.w, t.bh, t.l),
-      new THREE.MeshLambertMaterial({ color: bodyCol }));
+    // With a skin, the texture carries the colour (white tint) and legs are just
+    // shaded a touch darker; without one, fall back to the flat body/head hues.
+    const bodyMat = skin ? new THREE.MeshLambertMaterial({ map: skin })
+      : new THREE.MeshLambertMaterial({ color: bodyCol });
+    const headMat = skin ? new THREE.MeshLambertMaterial({ map: skin })
+      : new THREE.MeshLambertMaterial({ color: t.head });
+    const legMat = skin ? new THREE.MeshLambertMaterial({ map: skin, color: 0xcccccc })
+      : new THREE.MeshLambertMaterial({ color: legCol });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(t.w, t.bh, t.l), bodyMat);
     body.position.y = t.legH + t.bh / 2;
     this.group.add(body);
 
-    const head = new THREE.Mesh(new THREE.BoxGeometry(t.hd, t.hd, t.hd),
-      new THREE.MeshLambertMaterial({ color: t.head }));
+    const head = new THREE.Mesh(new THREE.BoxGeometry(t.hd, t.hd, t.hd), headMat);
     head.position.set(0, t.legH + t.bh * 0.75, -t.l / 2 - t.hd * 0.3);
     const eyeMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
     for (const sx of [-0.1, 0.1]) {
@@ -55,8 +83,7 @@ class Mob {
     for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
       const g = new THREE.Group();
       g.position.set(sx * lx, t.legH, sz * lz);
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(t.legW, t.legH, t.legW),
-        new THREE.MeshLambertMaterial({ color: legCol }));
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(t.legW, t.legH, t.legW), legMat);
       leg.position.y = -t.legH / 2;
       g.add(leg);
       this.group.add(g);
@@ -146,11 +173,12 @@ class Mob {
 }
 
 export class Mobs {
-  constructor(scene, world) {
+  constructor(scene, world, textures = []) {
     this.scene = scene;
     this.world = world;
     this.mobs = [];
     this.spawnTimer = 2;
+    loadMobSkins(textures);   // use any /static/textures/mob_<type>.png that exist
   }
 
   update(dt, playerPos) {

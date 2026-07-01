@@ -446,7 +446,7 @@ async function startGame(worldId, demo) {
   buildHotbar(atlas.image, player);
   world.update(spawn.x, spawn.z);   // preload spawn chunks
 
-  const mobs = new Mobs(scene, world);   // wandering animals
+  const mobs = new Mobs(scene, world, assets.textures);   // wandering animals (+ optional skins)
 
   // Multiplayer: stream our position and apply others' edits + movements.
   const remotes = new RemotePlayers(scene);
