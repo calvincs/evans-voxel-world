@@ -256,6 +256,18 @@ class Mob {
     return false;
   }
 
+  // Horizontal move that can climb a single-block step, the way the player gets
+  // up a ledge by jumping. Returns true if still blocked after trying to step.
+  _stepMove(world, axis, amount) {
+    if (!this._moveAxis(world, axis, amount)) return false;   // moved freely
+    if (!this.onGround) return true;                          // can't step mid-air
+    const startY = this.pos.y;
+    this.pos.y += 1.0;                                        // hop up one block…
+    if (this._collides(world)) { this.pos.y = startY; return true; }   // no headroom
+    if (this._moveAxis(world, axis, amount)) { this.pos.y = startY; return true; } // step too tall
+    return false;                                            // stepped up; gravity settles it
+  }
+
   _inWater(world, x, y, z) {
     return world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) === WATER;
   }
@@ -293,8 +305,8 @@ class Mob {
     this.vel.y -= GRAVITY * dt;
     if (this.vel.y < -40) this.vel.y = -40;
 
-    if (this._moveAxis(world, 'x', this.vel.x * dt)) { this.targetYaw = this.yaw + 1.5; this.vel.x = 0; }
-    if (this._moveAxis(world, 'z', this.vel.z * dt)) { this.targetYaw = this.yaw + 1.5; this.vel.z = 0; }
+    if (this._stepMove(world, 'x', this.vel.x * dt)) { this.targetYaw = this.yaw + 1.5; this.vel.x = 0; }
+    if (this._stepMove(world, 'z', this.vel.z * dt)) { this.targetYaw = this.yaw + 1.5; this.vel.z = 0; }
     const hitY = this._moveAxis(world, 'y', this.vel.y * dt);
     if (hitY) { this.onGround = this.vel.y < 0; this.vel.y = 0; } else this.onGround = false;
 
