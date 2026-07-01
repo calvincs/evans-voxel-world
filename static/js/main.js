@@ -739,7 +739,7 @@ async function startGame(worldId, demo) {
     audio.setListener(player.pos.x, player.pos.y + 1.62, player.pos.z, player.yaw);
     sky.update(dt, player.pos);
     world.update(player.pos.x, player.pos.z, dt, sky.daylight);
-    mobs.update(dt, player.pos);
+    mobs.update(dt, player, sky.daylight);
 
     // Multiplayer sync.
     if (player.locked) net.sendPos(player.state(), performance.now());

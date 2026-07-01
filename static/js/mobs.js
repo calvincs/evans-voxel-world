@@ -17,7 +17,7 @@ const TYPES = {
   cow:     { shape: 'quad',    body: 0x6e4b34, head: 0x4a3322, w: 0.72, bh: 0.62, l: 1.0,  legH: 0.42, legW: 0.18, hd: 0.42, speed: 1.1 },
   wolf:    { shape: 'quad',    body: 0x9b9b9b, head: 0x8b8b8b, w: 0.48, bh: 0.48, l: 0.92, legH: 0.44, legW: 0.14, hd: 0.34, speed: 2.5, tail: true },
   chicken: { shape: 'chicken', body: 0xffffff, head: 0xf2f2f2, w: 0.34, bh: 0.32, l: 0.4,  legH: 0.24, legW: 0.07, hd: 0.24, speed: 1.5, foot: 0xe6a020, comb: 0xd23b3b },
-  spider:  { shape: 'spider',  body: 0x2a2320, head: 0x1c1614, w: 0.7,  bh: 0.34, l: 0.7,  legH: 0.3,  legW: 0.07, hd: 0.4,  speed: 2.2, eye: 0xb03030 },
+  spider:  { shape: 'spider',  body: 0x2a2320, head: 0x1c1614, w: 0.7,  bh: 0.34, l: 0.7,  legH: 0.3,  legW: 0.07, hd: 0.4,  speed: 2.2, eye: 0xb03030, night: true },
   squid:   { shape: 'squid',   aquatic: true, body: 0x7a2a5a, head: 0x7a2a5a, w: 0.5, bh: 0.66, l: 0.5, legW: 0.09, speed: 1.1 },
 };
 const TYPE_KEYS = Object.keys(TYPES);
@@ -383,11 +383,12 @@ export class Mobs {
     loadMobSkins(textures);   // use any /static/textures/mob_<type>.png that exist
   }
 
-  update(dt, playerPos) {
+  update(dt, player, daylight = 1) {
+    const playerPos = player.pos;
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
       this.spawnTimer = 2.5 + Math.random() * 3;
-      if (this.mobs.length < MAX_MOBS) this._trySpawn(playerPos);
+      if (this.mobs.length < MAX_MOBS) this._trySpawn(playerPos, daylight);
     }
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
@@ -396,7 +397,7 @@ export class Mobs {
     }
   }
 
-  _trySpawn(playerPos) {
+  _trySpawn(playerPos, daylight) {
     // A quarter of the time, try to seed a squid in nearby deep water instead.
     if (WATER_KEYS.length && Math.random() < 0.25) { this._trySpawnWater(playerPos); return; }
 
@@ -411,7 +412,11 @@ export class Mobs {
       if (isSolid(b)) { if (b === GRASS) surfaceY = y; break; }
     }
     if (surfaceY === null) return;
-    const type = LAND_KEYS[Math.floor(Math.random() * LAND_KEYS.length)];
+    // Nocturnal creatures (spiders) only appear once it's dark enough.
+    const night = daylight < 0.35;
+    const pool = LAND_KEYS.filter((k) => night || !TYPES[k].night);
+    if (!pool.length) return;
+    const type = pool[Math.floor(Math.random() * pool.length)];
     this.mobs.push(new Mob(this.scene, type, x + 0.5, surfaceY + 1, z + 0.5));
   }
 
