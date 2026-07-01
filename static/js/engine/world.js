@@ -136,10 +136,7 @@ export class World {
     this.pending.add(k);
     try {
       const res = await fetch(`${this.base}/chunk/${cx}/${cz}`);
-      const json = await res.json();
-      const bin = atob(json.data);
-      const data = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+      const data = new Uint8Array(await res.arrayBuffer());   // raw block bytes
       this.chunks.set(k, new Chunk(cx, cz, data));
       this._scanGlow(cx, cz, data, true);   // index any glowstones in this chunk
       // Neighbours can now cull their shared border faces.

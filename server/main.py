@@ -9,7 +9,6 @@ the state is restored). Auth uses only the standard library — see accounts.py.
 Run:  python -m uvicorn server.main:app --reload  (or ./run.sh)
 """
 
-import base64
 import os
 
 import itertools
@@ -346,8 +345,10 @@ def world_chunk(wid: str, cx: int, cz: int, request: Request):
         wid, cx, cz, worldgen.CHUNK_X, worldgen.CHUNK_Z, worldgen.WORLD_Y)
     for (lx, y, lz), block in edits.items():
         blocks[lx + worldgen.CHUNK_X * (lz + worldgen.CHUNK_Z * y)] = block
-    return {"cx": cx, "cz": cz,
-            "data": base64.b64encode(bytes(blocks)).decode("ascii")}
+    # Raw block bytes (CHUNK_X*CHUNK_Z*WORLD_Y, row-major by the shared index).
+    # No base64/JSON: smaller, and the client reads it straight into a Uint8Array
+    # instead of decoding char-by-char. GZipMiddleware still compresses it.
+    return Response(content=bytes(blocks), media_type="application/octet-stream")
 
 
 @app.post("/api/worlds/{wid}/edit")
