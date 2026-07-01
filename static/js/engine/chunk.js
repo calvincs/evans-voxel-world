@@ -48,13 +48,19 @@ export class Chunk {
     const water = { pos: [], norm: [], uv: [], idx: [] };
     const glow = { pos: [], norm: [], uv: [], idx: [] };
 
-    const addFace = (buf, face, wx, y, wz, slot) => {
+    // Vertices are quantized to shrink heap + VRAM (~10 bytes/vertex vs 32):
+    //   position -> chunk-local Uint8 (the mesh is offset to the chunk origin)
+    //   normal   -> signed byte, ±127 ≈ ±1 (GPU-normalized)
+    //   uv       -> Uint16, 0..65535 mapped to 0..1 (GPU-normalized)
+    const addFace = (buf, face, x, y, z, slot) => {
       const { u0, u1, v0, v1 } = tileUV(slot);
       const base = buf.pos.length / 3;
       for (const [dx, dy, dz, ul, vl] of face.corners) {
-        buf.pos.push(wx + dx, y + dy, wz + dz);
-        buf.norm.push(face.n[0], face.n[1], face.n[2]);
-        buf.uv.push(u0 + ul * (u1 - u0), v0 + vl * (v1 - v0));
+        buf.pos.push(x + dx, y + dy, z + dz);
+        buf.norm.push(face.n[0] * 127, face.n[1] * 127, face.n[2] * 127);
+        buf.uv.push(
+          Math.round((u0 + ul * (u1 - u0)) * 65535),
+          Math.round((v0 + vl * (v1 - v0)) * 65535));
       }
       buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
@@ -73,7 +79,8 @@ export class Chunk {
             const nb = world.getBlock(wx + face.n[0], y + face.n[1], wz + face.n[2]);
             // Draw the face only against a transparent, different neighbour.
             if (!isTransparent(nb) || nb === block) continue;
-            addFace(buf, face, wx, y, wz, def[face.tile]);
+            // Positions are chunk-local (x,y,z); the mesh carries the offset.
+            addFace(buf, face, x, y, z, def[face.tile]);
           }
         }
       }
@@ -93,11 +100,16 @@ export class Chunk {
     }
     if (buf.idx.length === 0) return;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(buf.pos, 3));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(buf.norm, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(buf.uv, 2));
+    // Quantized attributes (see addFace). Position stays Uint8, which assumes
+    // chunk dims and WORLD_Y are <= 255 (currently 16 / 16 / 64); bump to
+    // Uint16 here if a much taller world is ever configured.
+    geo.setAttribute('position', new THREE.Uint8BufferAttribute(buf.pos, 3));
+    geo.setAttribute('normal', new THREE.Int8BufferAttribute(buf.norm, 3, true));
+    geo.setAttribute('uv', new THREE.Uint16BufferAttribute(buf.uv, 2, true));
     geo.setIndex(buf.idx);
     const mesh = new THREE.Mesh(geo, material);
+    // Local positions are relative to this chunk's origin.
+    mesh.position.set(this.cx * DIM.CX, 0, this.cz * DIM.CZ);
     mesh.frustumCulled = true;
     this[key] = mesh;
     world.scene.add(mesh);
