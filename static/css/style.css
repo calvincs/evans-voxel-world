@@ -447,6 +447,7 @@ html, body {
 body:not(.in-game) #hud,
 body:not(.in-game) #crosshair,
 body:not(.in-game) #health,
+body:not(.in-game) #underwater,
 body:not(.in-game) #hotbar,
 body:not(.in-game) #music,
 body:not(.in-game) #voice,
@@ -659,6 +660,17 @@ body:not(.in-game) #talk { display: none !important; }
   transition: opacity 0.16s ease-out;
 }
 #hurt.show { opacity: 1; transition: opacity 0.05s ease-in; }
+
+/* Blue wash while the player's head is underwater — a screen effect, since the
+   water blocks around you have their inner faces culled and aren't drawn. */
+#underwater {
+  position: fixed; inset: 0; z-index: 4;   /* over the world, under the HUD */
+  pointer-events: none; opacity: 0;
+  background: radial-gradient(ellipse at center,
+              rgba(24, 86, 150, 0.32) 0%, rgba(12, 54, 104, 0.55) 100%);
+  transition: opacity 0.25s ease;
+}
+#underwater.on { opacity: 1; }
 
 /* Death screen (mirrors the disconnected overlay). */
 #dead {

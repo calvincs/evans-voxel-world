@@ -16,7 +16,7 @@ import { RemotePlayers, playerColor, SELF_COLOR } from './remoteplayers.js';
 import { Voice } from './voice.js';
 import { Mobs } from './mobs.js';
 import {
-  buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, CRAFT, ATLAS_COLS, TILE_PX, blockColor,
+  buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, CRAFT, ATLAS_COLS, TILE_PX, blockColor, WATER,
 } from './blocks.js';
 
 const $ = (id) => document.getElementById(id);
@@ -765,6 +765,7 @@ async function startGame(worldId, demo) {
   const clock = new THREE.Clock();
   let lastSel = -1;
   const coordsEl = $('coords');
+  const underwaterEl = $('underwater');
   let lastCoords = '';
   function loop() {
     requestAnimationFrame(loop);
@@ -783,6 +784,12 @@ async function startGame(worldId, demo) {
     // Reflect who's talking on characters + roster.
     remotes.players.forEach((_, id) => remotes.setSpeaking(id, voice.isSpeaking(id)));
     updateRosterSpeaking();
+
+    // Blue wash when the eye is inside water (the surrounding water faces are
+    // culled, so this is what makes being submerged read as underwater).
+    const submerged = world.getBlock(Math.floor(player.pos.x),
+      Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z)) === WATER;
+    underwaterEl.classList.toggle('on', submerged);
 
     if (player.selected !== lastSel) { highlightSlot(player.selected); lastSel = player.selected; }
     // Only touch the DOM when the shown text actually changes (most frames it
