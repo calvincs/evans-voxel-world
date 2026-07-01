@@ -11,6 +11,7 @@ Coordinate system (shared with the JS client, see static/js/engine/chunk.js):
     Flat index: idx = x + CHUNK_X * (z + CHUNK_Z * y)
 """
 
+import collections
 import math
 import random
 
@@ -37,6 +38,10 @@ BASE_HEIGHT = 24
 AMPLITUDE = 14
 TERRAIN_SCALE = 0.012   # smaller -> larger, smoother hills
 SNOW_LINE = 30          # peaks above this get snow caps
+
+# How many freshly generated chunks to keep cached per seed. Terrain is
+# deterministic, so a cache hit is exact. 512 * 16 KB ~= 8 MB per active world.
+CHUNK_CACHE_MAX = 512
 
 
 class Perlin:
@@ -103,6 +108,8 @@ class WorldGenerator:
     def __init__(self, seed: int = 1337):
         self.seed = seed
         self.perlin = Perlin(seed)
+        # (cx, cz) -> immutable base-terrain bytes (no edits applied).
+        self._chunk_cache: "collections.OrderedDict[tuple, bytes]" = collections.OrderedDict()
 
     def height_at(self, wx: int, wz: int) -> int:
         n = self.perlin.fbm(wx * TERRAIN_SCALE, wz * TERRAIN_SCALE, octaves=4)
@@ -121,6 +128,20 @@ class WorldGenerator:
         return (self._hash(wx, wz, 99) % 1000) < 4  # ~0.4% of grass columns
 
     def generate_chunk(self, cx: int, cz: int) -> bytearray:
+        """Base terrain for a chunk, as a fresh mutable bytearray the caller can
+        overlay edits onto. Cached per (cx, cz) since generation is deterministic
+        and CPU-heavy; the returned copy is always safe to mutate."""
+        cached = self._chunk_cache.get((cx, cz))
+        if cached is not None:
+            self._chunk_cache.move_to_end((cx, cz))   # mark most-recently-used
+            return bytearray(cached)
+        blocks = self._build_chunk(cx, cz)
+        self._chunk_cache[(cx, cz)] = bytes(blocks)    # store pristine, immutable
+        if len(self._chunk_cache) > CHUNK_CACHE_MAX:
+            self._chunk_cache.popitem(last=False)      # evict least-recently-used
+        return blocks
+
+    def _build_chunk(self, cx: int, cz: int) -> bytearray:
         blocks = bytearray(CHUNK_X * CHUNK_Z * WORLD_Y)  # zero == AIR
         base_x = cx * CHUNK_X
         base_z = cz * CHUNK_Z
