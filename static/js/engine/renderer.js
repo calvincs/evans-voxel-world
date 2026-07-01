@@ -6,7 +6,10 @@ const SKY = 0x8ec9ff;
 
 export function createRenderer(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // Fragment cost scales with pixelRatio^2. Phones/tablets (coarse pointer)
+  // often report DPR 2-3 on weaker GPUs, so cap them at 1.5; desktop keeps 2.
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, coarse ? 1.5 : 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   const scene = new THREE.Scene();
