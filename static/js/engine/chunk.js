@@ -76,7 +76,15 @@ export class Chunk {
           const buf = block === WATER ? water : (isGlow(block) ? glow : opaque);
 
           for (const face of FACES) {
-            const nb = world.getBlock(wx + face.n[0], y + face.n[1], wz + face.n[2]);
+            const nx = x + face.n[0], ny = y + face.n[1], nz = z + face.n[2];
+            // In-chunk neighbours read straight from our own block array; only
+            // faces on the six chunk borders fall through to world.getBlock,
+            // which floors the coords, builds a "cx,cz" key and hits a Map. Most
+            // of a chunk's ~90k neighbour checks are interior, so this avoids the
+            // bulk of that string + map churn on every rebuild.
+            const nb = (nx >= 0 && nx < DIM.CX && nz >= 0 && nz < DIM.CZ && ny >= 0 && ny < DIM.WY)
+              ? this.data[idx(nx, ny, nz)]
+              : world.getBlock(wx + face.n[0], y + face.n[1], wz + face.n[2]);
             // Draw the face only against a transparent, different neighbour.
             if (!isTransparent(nb) || nb === block) continue;
             // Positions are chunk-local (x,y,z); the mesh carries the offset.
