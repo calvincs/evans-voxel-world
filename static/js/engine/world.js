@@ -59,6 +59,8 @@ export class World {
         emissiveIntensity: 0.6,
       }),
     };
+    this._time = 0;
+    this._setupWaterFlow();
 
     // Glowstone light sources. We track every glowstone position and let a
     // small pool of point lights follow the nearest ones to the player, so the
@@ -73,6 +75,30 @@ export class World {
       this.scene.add(L);
       this.glowLights.push(L);
     }
+  }
+
+  // Give the water a gentle rolling surface so it reads as a living fluid rather
+  // than a flat pane. A wave is applied to the top faces in-shader (driven by a
+  // uTime uniform), so it costs nothing per frame beyond the uniform and never
+  // touches the chunk geometry. The surface also sits slightly recessed so water
+  // looks a touch below the block brim. Phase is by world x/z, so it stays
+  // seamless across blocks and chunks.
+  _setupWaterFlow() {
+    const mat = this.materials.water;
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = { value: this._time };
+      mat.userData.shader = shader;
+      shader.vertexShader = 'uniform float uTime;\n' + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `vec3 transformed = vec3( position );
+         if ( normal.y > 0.5 ) {
+           vec3 wpos = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+           transformed.y -= 0.12;
+           transformed.y += 0.05 * sin( uTime * 1.6 + wpos.x * 0.7 + wpos.z * 0.7 )
+                          + 0.03 * sin( uTime * 2.3 + wpos.x * 0.3 - wpos.z * 0.5 );
+         }`);
+    };
   }
 
   getChunk(cx, cz) { return this.chunks.get(key(cx, cz)); }
@@ -153,6 +179,9 @@ export class World {
   // and rebuild a few dirty meshes. Budgets keep frame times smooth.
   update(px, pz, dt = 0, daylight = 1) {
     this._px = px; this._pz = pz;
+    this._time += dt;
+    const ws = this.materials.water.userData.shader;
+    if (ws) ws.uniforms.uTime.value = this._time;
     this._updateEffects(dt);
     this._updateGlow(daylight, dt);
     const ccx = floorDiv(px, DIM.CX), ccz = floorDiv(pz, DIM.CZ);
