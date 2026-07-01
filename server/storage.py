@@ -40,12 +40,20 @@ DEFAULT_SNAPSHOT_INTERVAL = 20 * 60   # seconds between automatic snapshots
 
 class WorldStore:
     def __init__(self, dir_path: str, legacy_path: str | None = None,
-                 snapshots=None, snapshot_interval: int = DEFAULT_SNAPSHOT_INTERVAL):
+                 snapshots=None, snapshot_interval: int = DEFAULT_SNAPSHOT_INTERVAL,
+                 chunk_x: int = 16, chunk_z: int = 16):
         self.dir = dir_path
         os.makedirs(self.dir, exist_ok=True)
         self.cache: dict[str, dict] = {}
         self.snapshots = snapshots            # optional SnapshotStore
         self.snapshot_interval = snapshot_interval
+        # Chunk footprint used to bucket edits for fast per-chunk lookup.
+        self.chunk_x = chunk_x
+        self.chunk_z = chunk_z
+        # wid -> { (cx, cz): { (x, y, z): block } }. Derived from w["edits"], built
+        # lazily, kept in sync on writes; never serialized. Lets edits_in_chunk
+        # touch only the edits in one chunk instead of scanning the whole world.
+        self._index: dict[str, dict[tuple, dict]] = {}
         self._migrate_legacy(legacy_path)
 
     # --- paths / ids ----------------------------------------------------------
@@ -180,6 +188,7 @@ class WorldStore:
     def delete(self, wid: str) -> bool:
         with _LOCK:
             self.cache.pop(wid, None)
+            self._index.pop(wid, None)
             path = self._path(wid)
             existed = os.path.exists(path)
             if existed:
@@ -216,6 +225,7 @@ class WorldStore:
             w["edits"] = dict(edits or {})
             w["player"] = player
             w["lastPlayed"] = _now()
+            self._index.pop(wid, None)      # edits replaced wholesale; rebuild lazily
             self._write(w)
         return True
 
@@ -249,6 +259,33 @@ class WorldStore:
                 w["lastPlayed"] = _now()
                 self._write(w)
 
+    # --- edit index (per-chunk) ----------------------------------------------
+    def _chunk_of(self, x: int, z: int) -> tuple:
+        # Floor division matches the client's floorDiv (correct for negatives).
+        return (x // self.chunk_x, z // self.chunk_z)
+
+    def _index_for(self, wid: str) -> dict:
+        """Per-chunk edit buckets for a world, built on first use from w["edits"]
+        and cached. Callers hold _LOCK."""
+        idx = self._index.get(wid)
+        if idx is None:
+            idx = {}
+            w = self._load(wid)
+            if w:
+                for key, block in w["edits"].items():
+                    x, y, z = (int(v) for v in key.split(","))
+                    idx.setdefault(self._chunk_of(x, z), {})[(x, y, z)] = block
+            self._index[wid] = idx
+        return idx
+
+    def _index_put(self, wid: str, x: int, y: int, z: int, block: int):
+        """Mirror one edit into the index if it's already built. Callers hold
+        _LOCK. If the index isn't built yet, it will pick this edit up from
+        w["edits"] when it's first constructed, so there's nothing to do."""
+        idx = self._index.get(wid)
+        if idx is not None:
+            idx.setdefault(self._chunk_of(x, z), {})[(x, y, z)] = block
+
     # --- edits / player -------------------------------------------------------
     @staticmethod
     def key(x: int, y: int, z: int) -> str:
@@ -261,6 +298,7 @@ class WorldStore:
         with _LOCK:
             w["edits"][self.key(x, y, z)] = block
             w["lastPlayed"] = _now()
+            self._index_put(wid, x, y, z, block)
             self._write(w)
         self.maybe_snapshot(wid)
 
@@ -271,6 +309,7 @@ class WorldStore:
         with _LOCK:
             for x, y, z, block in items:
                 w["edits"][self.key(x, y, z)] = block
+                self._index_put(wid, x, y, z, block)
             w["lastPlayed"] = _now()
             self._write(w)
         self.maybe_snapshot(wid)
@@ -285,13 +324,12 @@ class WorldStore:
             self._write(w)
 
     def edits_in_chunk(self, wid, cx, cz, chunk_x, chunk_z, world_y):
-        w = self._load(wid)
-        if not w:
-            return {}
-        out = {}
-        x0, z0 = cx * chunk_x, cz * chunk_z
-        for key, block in w["edits"].items():
-            x, y, z = (int(v) for v in key.split(","))
-            if x0 <= x < x0 + chunk_x and z0 <= z < z0 + chunk_z and 0 <= y < world_y:
-                out[(x - x0, y, z - z0)] = block
-        return out
+        with _LOCK:
+            bucket = self._index_for(wid).get((cx, cz))
+            if not bucket:
+                return {}
+            x0, z0 = cx * chunk_x, cz * chunk_z
+            # Only this chunk's edits are examined now, not the whole world.
+            return {(x - x0, y, z - z0): block
+                    for (x, y, z), block in bucket.items()
+                    if 0 <= y < world_y}

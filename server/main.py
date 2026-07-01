@@ -40,7 +40,8 @@ SNAP_INTERVAL = int(os.environ.get("EVANS_SNAPSHOT_INTERVAL", DEFAULT_SNAPSHOT_I
 
 snapshots = SnapshotStore(SNAP_DIR)
 store = WorldStore(WORLDS_DIR, legacy_path=LEGACY_PATH,
-                   snapshots=snapshots, snapshot_interval=SNAP_INTERVAL)
+                   snapshots=snapshots, snapshot_interval=SNAP_INTERVAL,
+                   chunk_x=worldgen.CHUNK_X, chunk_z=worldgen.CHUNK_Z)
 users = UserStore(USERS_PATH)
 sessions = SessionStore(SESSIONS_PATH)
 
