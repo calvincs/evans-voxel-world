@@ -1,0 +1,3 @@
+# Dependencies for the optional dev tools in this directory (not needed to run
+# the game). Install with:  pip install -r tools/requirements.txt
+Pillow>=10          # image downscaling for gen_mob_texture.py
