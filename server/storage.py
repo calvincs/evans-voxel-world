@@ -23,10 +23,13 @@ single-world format (data/world.json) are migrated on first run.
 
 import atexit
 import json
+import logging
 import os
 import random
 import threading
 import time
+
+log = logging.getLogger("uvicorn.error")
 
 _LOCK = threading.Lock()
 _ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -63,6 +66,13 @@ class WorldStore:
         # crash risks the last ~1 s of edits (snapshots + session-end cover the
         # rest).
         self._dirty: set[str] = set()
+        # Deleted world ids. An edit racing a delete could otherwise re-cache
+        # the world dict and make the flusher resurrect the file from the dead.
+        self._gone: set[str] = set()
+        # Edit revision per world vs. the revision last snapshotted, so a
+        # session that changed nothing doesn't write a redundant snapshot.
+        self._rev: dict[str, int] = {}
+        self._snap_rev: dict[str, int] = {}
         self._migrate_legacy(legacy_path)
         self._stop = threading.Event()
         self._flusher = threading.Thread(target=self._flush_loop, daemon=True)
@@ -102,6 +112,8 @@ class WorldStore:
     def _mark_dirty(self, world: dict):
         """Update the world in memory and queue it for a background flush, rather
         than rewriting the file on every edit. Callers hold _LOCK."""
+        if world["id"] in self._gone:
+            return                       # deleted while this edit was in flight
         self.cache[world["id"]] = world
         self._dirty.add(world["id"])
 
@@ -113,14 +125,23 @@ class WorldStore:
             for i in targets:
                 if i in self._dirty:
                     w = self.cache.get(i)
-                    if w is not None:
-                        self._write_file(w)
-                    self._dirty.discard(i)
+                    try:
+                        if w is not None:
+                            self._write_file(w)
+                        self._dirty.discard(i)
+                    except OSError:
+                        # Disk hiccup: stay dirty so the next tick retries.
+                        log.exception("flush failed for world %s (will retry)", i)
 
     def _flush_loop(self):
+        # This thread must never die: if it does, edits stop reaching the disk
+        # while the game plays on none the wiser.
         while not self._stop.wait(FLUSH_INTERVAL):
-            if self._dirty:
-                self.flush()
+            try:
+                if self._dirty:
+                    self.flush()
+            except Exception:
+                log.exception("world flush loop error (will retry)")
 
     def _load(self, wid: str) -> dict | None:
         if wid in self.cache:
@@ -140,6 +161,7 @@ class WorldStore:
         world.setdefault("owner", None)
         world.setdefault("ownerName", "")
         world.setdefault("public", True)
+        world.setdefault("peaceful", False)
         self.cache[wid] = world
         return world
 
@@ -179,6 +201,7 @@ class WorldStore:
             "owner": owner,
             "ownerName": w.get("ownerName", ""),
             "public": w.get("public", True),
+            "peaceful": w.get("peaceful", False),
             "mine": owner is not None and owner == viewer_uid,
             "unclaimed": owner is None,
         }
@@ -213,10 +236,12 @@ class WorldStore:
             "owner": owner,
             "ownerName": owner_name,
             "public": True,                          # public by default; owner can flip
+            "peaceful": False,
             "player": None,
             "edits": {},
         }
         with _LOCK:
+            self._gone.discard(world["id"])
             self._write(world)
         return world
 
@@ -231,9 +256,12 @@ class WorldStore:
 
     def delete(self, wid: str) -> bool:
         with _LOCK:
+            self._gone.add(wid)              # block in-flight edits from resurrecting it
             self.cache.pop(wid, None)
             self._index.pop(wid, None)
             self._dirty.discard(wid)         # nothing left to flush
+            self._rev.pop(wid, None)
+            self._snap_rev.pop(wid, None)
             path = self._path(wid)
             existed = os.path.exists(path)
             if existed:
@@ -261,6 +289,15 @@ class WorldStore:
             self._write(w)
         return True
 
+    def set_peaceful(self, wid: str, peaceful: bool) -> bool:
+        w = self._load(wid)
+        if not w:
+            return False
+        with _LOCK:
+            w["peaceful"] = bool(peaceful)
+            self._write(w)
+        return True
+
     def apply_state(self, wid: str, edits: dict, player) -> bool:
         """Replace a world's edits + player wholesale (used by revert)."""
         w = self._load(wid)
@@ -270,11 +307,23 @@ class WorldStore:
             w["edits"] = dict(edits or {})
             w["player"] = player
             w["lastPlayed"] = _now()
+            self._rev[wid] = self._rev.get(wid, 0) + 1
             self._index.pop(wid, None)      # edits replaced wholesale; rebuild lazily
             self._write(w)
         return True
 
     # --- snapshots ------------------------------------------------------------
+    def _snapshot_state(self, wid: str, w: dict) -> tuple | None:
+        """Copy what a snapshot needs under _LOCK (other threads mutate the edits
+        dict), or None if this exact revision was already captured. The skip only
+        trusts captures made during this run — after a restart we can't know
+        whether the previous run's last edits ever made it into a snapshot."""
+        with _LOCK:
+            rev = self._rev.get(wid, 0)
+            if self._snap_rev.get(wid) == rev:
+                return None
+            return rev, dict(w.get("edits") or {}), w.get("player")
+
     def maybe_snapshot(self, wid: str):
         """Capture a snapshot if enough time has passed since the last one. Cheap
         to call on every edit — it only writes when the interval has elapsed."""
@@ -285,17 +334,28 @@ class WorldStore:
             return
         if _now() - self.snapshots.last_ts(wid) < self.snapshot_interval:
             return
-        self.snapshots.capture(wid, w.get("edits", {}), w.get("player"), label="auto")
+        state = self._snapshot_state(wid, w)
+        if state:
+            rev, edits, player = state
+            self.snapshots.capture(wid, edits, player, label="auto")
+            self._snap_rev[wid] = rev
 
     def snapshot_now(self, wid: str, label: str = "") -> dict | None:
         """Force a snapshot immediately (e.g. when the last player leaves, or as a
-        safety copy right before a revert)."""
+        safety copy right before a revert). Skipped when nothing changed since
+        the previous snapshot — flaky Wi-Fi shouldn't mint one copy per rejoin."""
         if not self.snapshots:
             return None
         w = self._load(wid)
         if not w:
             return None
-        return self.snapshots.capture(wid, w.get("edits", {}), w.get("player"), label=label)
+        state = self._snapshot_state(wid, w)
+        if not state:
+            return None
+        rev, edits, player = state
+        snap = self.snapshots.capture(wid, edits, player, label=label)
+        self._snap_rev[wid] = rev
+        return snap
 
     def touch(self, wid: str):
         w = self._load(wid)
@@ -343,6 +403,7 @@ class WorldStore:
         with _LOCK:
             w["edits"][self.key(x, y, z)] = block
             w["lastPlayed"] = _now()
+            self._rev[wid] = self._rev.get(wid, 0) + 1
             self._index_put(wid, x, y, z, block)
             self._mark_dirty(w)
         self.maybe_snapshot(wid)
@@ -356,6 +417,7 @@ class WorldStore:
                 w["edits"][self.key(x, y, z)] = block
                 self._index_put(wid, x, y, z, block)
             w["lastPlayed"] = _now()
+            self._rev[wid] = self._rev.get(wid, 0) + 1
             self._mark_dirty(w)
         self.maybe_snapshot(wid)
 

@@ -73,6 +73,12 @@ export class Sky {
     this.scene.add(this.stars);
   }
 
+  // Anchor the day/night phase to a shared wall clock (the server's), so every
+  // player in a world sees the same time of day — and the same spiders.
+  syncTo(unixSeconds) {
+    this.time = ((unixSeconds / this.dayLength) + 0.30) % 1;
+  }
+
   update(dt, playerPos) {
     this.time = (this.time + dt / this.dayLength) % 1;
     const phase = this.time * Math.PI * 2;

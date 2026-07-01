@@ -87,10 +87,11 @@ export const HOTBAR = [
   GRASS, DIRT, STONE, COBBLE, PLANKS, WOOD, GLASS, GLOWSTONE,
 ];
 
-// Everything available in the inventory picker (E).
+// Everything available in the inventory picker (E). Water is placeable — the
+// mesher/transparency already handle it anywhere, so kids can build pools.
 export const ALL_BLOCKS = [
   GRASS, DIRT, STONE, COBBLE, MOSSY, MARBLE, PLANKS, WOOD, LEAVES, SAND,
-  SNOW, BRICK, GLASS, GLOWSTONE, GOLD, DIAMOND, PUMPKIN,
+  SNOW, BRICK, GLASS, WATER, GLOWSTONE, GOLD, DIAMOND, PUMPKIN,
   WOOL_RED, WOOL_BLUE, RAINBOW, TNT, FLINT, FIRESTONE,
 ];
 

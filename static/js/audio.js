@@ -274,6 +274,84 @@ export function playExplosion(pos) {
   o.start(t0); o.stop(t0 + 0.6);
 }
 
+// You took a hit — short low "oof" thump (always local, so no position).
+export function playHurt() {
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = 'square';
+  o.frequency.setValueAtTime(190, t0);
+  o.frequency.exponentialRampToValueAtTime(70, t0 + 0.12);
+  const g = env(t0, 0.3, 0.16);
+  o.connect(g); g.connect(sfxGain);
+  o.start(t0); o.stop(t0 + 0.18);
+}
+
+// Plunging into water.
+export function playSplash(pos) {
+  if (!ctx) return;
+  const d = dest(pos, 24); if (!d) return;
+  const t0 = ctx.currentTime;
+  const src = noiseSource();
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(1600, t0);
+  lp.frequency.exponentialRampToValueAtTime(300, t0 + 0.3);
+  const g = env(t0, 0.45 * d.gain, 0.35, 0.02);
+  src.connect(lp); lp.connect(g); g.connect(d.node);
+  src.start(t0); src.stop(t0 + 0.4);
+}
+
+// A hostile creature has spotted you — low growl, fair warning before the bite.
+export function playGrowl(pos) {
+  if (!ctx) return;
+  const d = dest(pos, 20); if (!d) return;
+  const t0 = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(65, t0);
+  o.frequency.linearRampToValueAtTime(52, t0 + 0.35);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 350;
+  const g = env(t0, 0.4 * d.gain, 0.4, 0.05);
+  o.connect(lp); lp.connect(g); g.connect(d.node);
+  o.start(t0); o.stop(t0 + 0.45);
+}
+
+// A swing connected with a creature — fleshy smack, distinct from block-break.
+export function playMobHit(pos) {
+  if (!ctx) return;
+  const d = dest(pos, 24); if (!d) return;
+  const t0 = ctx.currentTime;
+  const src = noiseSource();
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 1.2;
+  const ng = env(t0, 0.4 * d.gain, 0.12);
+  src.connect(bp); bp.connect(ng); ng.connect(d.node);
+  src.start(t0); src.stop(t0 + 0.14);
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(300, t0);
+  o.frequency.exponentialRampToValueAtTime(140, t0 + 0.08);
+  const og = env(t0, 0.3 * d.gain, 0.1);
+  o.connect(og); og.connect(d.node);
+  o.start(t0); o.stop(t0 + 0.12);
+}
+
+// A creature went down — sad little descending whistle.
+export function playMobDeath(pos) {
+  if (!ctx) return;
+  const d = dest(pos, 26); if (!d) return;
+  const t0 = ctx.currentTime;
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(330, t0);
+  o.frequency.exponentialRampToValueAtTime(70, t0 + 0.3);
+  const g = env(t0, 0.32 * d.gain, 0.32, 0.01);
+  o.connect(g); g.connect(d.node);
+  o.start(t0); o.stop(t0 + 0.36);
+}
+
 let stepSalt = 7;
 export function playStep(pos) {
   if (!ctx) return;

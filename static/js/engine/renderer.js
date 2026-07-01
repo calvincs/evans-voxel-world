@@ -27,5 +27,14 @@ export function createRenderer(canvas) {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
+  // Tablets/Chromebooks under memory pressure kill the WebGL context; without
+  // this the game silently freezes on a stale frame. Let the browser try to
+  // restore it, and reload if it doesn't come back quickly.
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    const t = setTimeout(() => location.reload(), 4000);
+    canvas.addEventListener('webglcontextrestored', () => clearTimeout(t), { once: true });
+  });
+
   return { renderer, scene, camera };
 }

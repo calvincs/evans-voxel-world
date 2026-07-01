@@ -14,6 +14,7 @@ export class Net {
     this.url = `${proto}://${location.host}/api/worlds/${worldId}/ws`;
     this._posT = 0;
     this._retry = null;
+    this._wasConnected = false;
     this._open();
   }
 
@@ -22,8 +23,13 @@ export class Net {
       this.ws = new WebSocket(this.url);
     } catch (_) { this._scheduleRetry(); return; }
     this.ws.onopen = () => {
+      const rejoined = this._wasConnected;
+      this._wasConnected = true;
       this.connected = true;
       this._send({ type: 'hello', name: this.name });
+      // A reconnect means we missed messages (edits, leaves): let the game
+      // resync world + roster + voice.
+      if (rejoined && this.handlers.onReconnect) this.handlers.onReconnect();
     };
     this.ws.onmessage = (e) => {
       let m; try { m = JSON.parse(e.data); } catch (_) { return; }

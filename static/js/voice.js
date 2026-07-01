@@ -97,6 +97,14 @@ export class Voice {
     if (this.onState) this.onState();
   }
 
+  // After a socket reconnect our pid changed, so every existing peer link is
+  // orphaned: drop them all and re-announce, which re-runs the join handshake.
+  rejoin() {
+    if (!this.enabled) return;
+    for (const id of [...this.peers.keys()]) this._removePeer(id);
+    this.net.sendVoiceJoin();
+  }
+
   // --- Signaling (dispatched from main on net.onVoice) ----------------------
   handle(m) {
     switch (m.sub) {

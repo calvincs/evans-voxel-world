@@ -9,15 +9,21 @@ the state is restored). Auth uses only the standard library — see accounts.py.
 Run:  python -m uvicorn server.main:app --reload  (or ./run.sh)
 """
 
-import os
-
+import asyncio
 import itertools
+import logging
+import math
+import os
+import time
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+log = logging.getLogger("uvicorn.error")
 
 from . import worldgen
 from .accounts import UserStore, SessionStore, DEFAULT_COLORS
@@ -36,7 +42,10 @@ SNAP_DIR = os.environ.get("EVANS_SNAPSHOTS_DIR") or os.path.join(DATA_DIR, "snap
 USERS_PATH = os.environ.get("EVANS_USERS_PATH") or os.path.join(DATA_DIR, "users.json")
 SESSIONS_PATH = os.environ.get("EVANS_SESSIONS_PATH") or os.path.join(DATA_DIR, "sessions.json")
 LEGACY_PATH = os.environ.get("EVANS_LEGACY_PATH") or os.path.join(DATA_DIR, "world.json")
-SNAP_INTERVAL = int(os.environ.get("EVANS_SNAPSHOT_INTERVAL", DEFAULT_SNAPSHOT_INTERVAL))
+try:
+    SNAP_INTERVAL = int(os.environ.get("EVANS_SNAPSHOT_INTERVAL", DEFAULT_SNAPSHOT_INTERVAL))
+except ValueError:
+    SNAP_INTERVAL = DEFAULT_SNAPSHOT_INTERVAL
 
 snapshots = SnapshotStore(SNAP_DIR)
 store = WorldStore(WORLDS_DIR, legacy_path=LEGACY_PATH,
@@ -68,6 +77,15 @@ app = FastAPI(title="EvansGame")
 # skips tiny JSON where framing overhead would dominate. (Already-compressed
 # audio barely shrinks, but it's fetched once and the cost is negligible.)
 app.add_middleware(GZipMiddleware, minimum_size=512)
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    """FastAPI's default 422 echoes the invalid input back — which crashes JSON
+    rendering when that input is NaN/Infinity. Return a compact body instead."""
+    errors = [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")}
+              for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 # --- Auth helpers ------------------------------------------------------------
@@ -102,11 +120,35 @@ def _ensure_guest() -> dict:
     import secrets
     u = users.by_username(GUEST_USERNAME)
     if not u:
-        u = users.create(GUEST_USERNAME, secrets.token_urlsafe(12), color=DEFAULT_COLORS[2])
+        try:
+            u = users.create(GUEST_USERNAME, secrets.token_urlsafe(12), color=DEFAULT_COLORS[2])
+        except ValueError:
+            # Two first-time kiosk tabs raced to create the account; use the winner's.
+            u = users.by_username(GUEST_USERNAME)
     return u
 
 
-# --- Models ------------------------------------------------------------------
+# --- Models / validation -------------------------------------------------------
+MAX_COORD = 10_000_000        # sanity bound for block coordinates
+MAX_EDIT_BATCH = 4096         # matches the client's flood-fill cap
+
+
+def _int_in(v, lo, hi) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def _finite(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _valid_edit(x, y, z, block) -> bool:
+    """One gate for every edit path. WS messages bypass pydantic, and a bad value
+    that reaches the persisted edits map can poison the world file (bytearray
+    range errors / unparseable index keys) — so nothing is stored unchecked."""
+    return (_int_in(x, -MAX_COORD, MAX_COORD) and _int_in(z, -MAX_COORD, MAX_COORD)
+            and _int_in(y, 0, worldgen.WORLD_Y - 1) and _int_in(block, 0, 255))
+
+
 class Edit(BaseModel):
     x: int
     y: int
@@ -119,12 +161,15 @@ class Edits(BaseModel):
 
 
 class PlayerState(BaseModel):
-    x: float
-    y: float
-    z: float
-    yaw: float = 0.0
-    pitch: float = 0.0
+    # NaN/inf must never be persisted: Starlette renders JSON with
+    # allow_nan=False, so one bad float makes /config 500 until overwritten.
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    z: float = Field(allow_inf_nan=False)
+    yaw: float = Field(default=0.0, allow_inf_nan=False)
+    pitch: float = Field(default=0.0, allow_inf_nan=False)
     selected: int = 0
+    hotbar: list[int] | None = Field(default=None, max_length=16)
 
 
 class NewWorld(BaseModel):
@@ -137,6 +182,10 @@ class RenameWorld(BaseModel):
 
 class Visibility(BaseModel):
     public: bool
+
+
+class Peaceful(BaseModel):
+    peaceful: bool
 
 
 class Revert(BaseModel):
@@ -279,6 +328,16 @@ def set_visibility(wid: str, body: Visibility, request: Request):
     return {"ok": True, "public": body.public}
 
 
+@app.post("/api/worlds/{wid}/peaceful")
+def set_peaceful(wid: str, body: Peaceful, request: Request):
+    u = require_user(request)
+    w = world_or_404(wid)
+    if not _is_owner(w, u["uid"]):
+        raise HTTPException(403, "only the owner can change this")
+    store.set_peaceful(wid, body.peaceful)
+    return {"ok": True, "peaceful": body.peaceful}
+
+
 @app.delete("/api/worlds/{wid}")
 def delete_world(wid: str, request: Request):
     u = require_user(request)
@@ -302,13 +361,14 @@ async def revert_world(wid: str, body: Revert, request: Request):
     w = world_or_404(wid)
     if not _is_owner(w, u["uid"]):
         raise HTTPException(403, "only the owner can rewind this world")
-    snap = snapshots.get(wid, body.snapshotId)
-    if not snap:
+    snap = await asyncio.to_thread(snapshots.get, wid, body.snapshotId)
+    if not snap or "edits" not in snap:
         raise HTTPException(404, "snapshot not found")
     _reverting.add(wid)
     try:
-        store.snapshot_now(wid, label="before rewind")     # so a rewind is undoable
-        store.apply_state(wid, snap["edits"], snap.get("player"))
+        # Both store calls hit the disk; keep them off the event loop.
+        await asyncio.to_thread(store.snapshot_now, wid, label="before rewind")  # so a rewind is undoable
+        await asyncio.to_thread(store.apply_state, wid, snap["edits"], snap.get("player"))
         await _kick_room(wid)                               # boot everyone out
     finally:
         _reverting.discard(wid)
@@ -316,10 +376,32 @@ async def revert_world(wid: str, body: Revert, request: Request):
 
 
 # --- Per-world play ----------------------------------------------------------
+_spawns: dict[int, dict] = {}          # seed -> spawn point (deterministic)
+
+
+def _spawn_for(seed: int) -> dict:
+    """Spawn on dry land near the origin. An unlucky seed puts (0,0) under the
+    ocean, which strands a brand-new player on the seabed."""
+    spawn = _spawns.get(seed)
+    if spawn is None:
+        gen = gen_for(seed)
+        x = z = 0
+        h = gen.height_at(0, 0)
+        if h <= worldgen.WATER_LEVEL:
+            for r in range(4, 129, 4):           # spiral outward in 8 directions
+                cands = [(r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, r), (r, -r), (-r, -r)]
+                dry = next(((cx, cz, gen.height_at(cx, cz)) for cx, cz in cands
+                            if gen.height_at(cx, cz) > worldgen.WATER_LEVEL), None)
+                if dry:
+                    x, z, h = dry
+                    break
+        spawn = _spawns[seed] = {"x": x + 0.5, "y": h + 3, "z": z + 0.5}
+    return spawn
+
+
 @app.get("/api/worlds/{wid}/config")
 def world_config(wid: str, request: Request):
     u, w = access_or_error(request, wid)
-    spawn_h = gen_for(w["seed"]).height_at(0, 0)
     store.touch(wid)
     return {
         "id": w["id"],
@@ -328,13 +410,17 @@ def world_config(wid: str, request: Request):
         "owner": w.get("owner"),
         "ownerName": w.get("ownerName", ""),
         "public": w.get("public", True),
+        "peaceful": w.get("peaceful", False),
         "mine": _is_owner(w, u["uid"]),
         "chunkX": worldgen.CHUNK_X,
         "chunkZ": worldgen.CHUNK_Z,
         "worldY": worldgen.WORLD_Y,
         "waterLevel": worldgen.WATER_LEVEL,
-        "spawn": {"x": 0.5, "y": spawn_h + 3, "z": 0.5},
+        "spawn": _spawn_for(w["seed"]),
         "player": w.get("player"),
+        # Server wall clock: clients derive the day/night phase from this so
+        # everyone in a world shares the same night (and the same spiders).
+        "serverNow": time.time(),
     }
 
 
@@ -355,10 +441,8 @@ def world_chunk(wid: str, cx: int, cz: int, request: Request):
 @app.post("/api/worlds/{wid}/edit")
 def world_edit(wid: str, edit: Edit, request: Request):
     access_or_error(request, wid)
-    if not (0 <= edit.y < worldgen.WORLD_Y):
-        raise HTTPException(400, "y out of range")
-    if not (0 <= edit.block < 256):
-        raise HTTPException(400, "bad block id")
+    if not _valid_edit(edit.x, edit.y, edit.z, edit.block):
+        raise HTTPException(400, "bad edit")
     store.set_block(wid, edit.x, edit.y, edit.z, edit.block)
     return {"ok": True}
 
@@ -366,8 +450,8 @@ def world_edit(wid: str, edit: Edit, request: Request):
 @app.post("/api/worlds/{wid}/edits")
 def world_edits(wid: str, payload: Edits, request: Request):
     access_or_error(request, wid)
-    items = [(e.x, e.y, e.z, e.block) for e in payload.edits
-             if 0 <= e.y < worldgen.WORLD_Y and 0 <= e.block < 256]
+    items = [(e.x, e.y, e.z, e.block) for e in payload.edits[:MAX_EDIT_BATCH]
+             if _valid_edit(e.x, e.y, e.z, e.block)]
     store.set_blocks(wid, items)
     return {"ok": True, "count": len(items)}
 
@@ -388,14 +472,23 @@ _reverting: set[str] = set()            # worlds mid-rewind (reject joins briefl
 _pid_counter = itertools.count(1)
 
 
-async def _broadcast(room: dict, sender, msg: dict):
-    for ws in list(room.keys()):
-        if ws is sender:
-            continue
+async def _send_safe(ws, msg: dict, timeout: float = 2.0):
+    """Send with a timeout so one stalled client (a tablet that went to sleep
+    with the socket open) can't hold up the room. On failure the socket is
+    closed; its handler then cleans up through the normal disconnect path."""
+    try:
+        await asyncio.wait_for(ws.send_json(msg), timeout)
+    except Exception:
         try:
-            await ws.send_json(msg)
+            await asyncio.wait_for(ws.close(), 1.0)
         except Exception:
             pass
+
+
+async def _broadcast(room: dict, sender, msg: dict):
+    targets = [ws for ws in list(room.keys()) if ws is not sender]
+    if targets:
+        await asyncio.gather(*(_send_safe(ws, msg) for ws in targets))
 
 
 async def _kick_room(wid: str):
@@ -444,28 +537,60 @@ async def world_ws(ws: WebSocket, wid: str):
     await ws.send_json({"type": "welcome", "id": pid, "color": color, "players": existing})
     room[ws] = state
 
+    POS_KEYS = ("x", "y", "z", "yaw", "pitch")
+    FX_KINDS = ("explode", "ignite")
+    FX_WINDOW, FX_MAX = 10.0, 40       # per-client effect rate limit
+    fx_t0, fx_n = 0.0, 0
+
     try:
         while True:
-            msg = await ws.receive_json()
+            try:
+                msg = await ws.receive_json()
+            except (ValueError, KeyError):
+                continue                            # malformed frame — ignore it
+            if not isinstance(msg, dict):
+                continue
             t = msg.get("type")
             if t == "pos":
-                state["pos"] = {k: msg.get(k, 0) for k in ("x", "y", "z", "yaw", "pitch")}
-                await _broadcast(room, ws, {"type": "pos", "id": pid, **state["pos"]})
+                vals = [msg.get(k, 0) for k in POS_KEYS]
+                if all(_finite(v) for v in vals):   # never relay NaN positions
+                    state["pos"] = dict(zip(POS_KEYS, (float(v) for v in vals)))
+                    await _broadcast(room, ws, {"type": "pos", "id": pid, **state["pos"]})
             elif t == "hello":
                 # Identity is server-authoritative now; just announce the join.
                 await _broadcast(room, ws, {"type": "join", "id": pid, "name": state["name"],
                                             "color": state["color"], "pos": state["pos"]})
             elif t == "edit":
-                store.set_block(wid, msg["x"], msg["y"], msg["z"], msg["block"])
-                await _broadcast(room, ws, {"type": "edit", "x": msg["x"], "y": msg["y"],
-                                            "z": msg["z"], "block": msg["block"]})
+                x, y, z, block = (msg.get(k) for k in ("x", "y", "z", "block"))
+                if _valid_edit(x, y, z, block) and wid not in _reverting:
+                    await asyncio.to_thread(store.set_block, wid, x, y, z, block)
+                    await _broadcast(room, ws, {"type": "edit", "x": x, "y": y,
+                                                "z": z, "block": block})
             elif t == "edits":
-                items = [(e["x"], e["y"], e["z"], e["block"]) for e in msg.get("edits", [])]
-                store.set_blocks(wid, items)
-                await _broadcast(room, ws, {"type": "edits", "edits": msg.get("edits", [])})
+                raw = msg.get("edits")
+                items = []
+                for e in (raw if isinstance(raw, list) else [])[:MAX_EDIT_BATCH]:
+                    if isinstance(e, dict) and _valid_edit(e.get("x"), e.get("y"),
+                                                           e.get("z"), e.get("block")):
+                        items.append((e["x"], e["y"], e["z"], e["block"]))
+                if items and wid not in _reverting:
+                    await asyncio.to_thread(store.set_blocks, wid, items)
+                    await _broadcast(room, ws, {"type": "edits", "edits": [
+                        {"x": x, "y": y, "z": z, "block": b} for (x, y, z, b) in items]})
             elif t == "fx":
-                # Ephemeral effect (explosion etc.) — relay only, no persistence.
-                await _broadcast(room, ws, msg)
+                # Ephemeral effect — relay only, no persistence. Rebuilt rather
+                # than forwarded verbatim, and rate-limited: receiving clients
+                # apply real blast damage from "explode".
+                now = time.monotonic()
+                if now - fx_t0 > FX_WINDOW:
+                    fx_t0, fx_n = now, 0
+                fx_n += 1
+                coords = [msg.get(k) for k in ("x", "y", "z")]
+                if (fx_n <= FX_MAX and msg.get("kind") in FX_KINDS
+                        and all(_finite(v) for v in coords)):
+                    await _broadcast(room, ws, {
+                        "type": "fx", "kind": msg["kind"],
+                        "x": float(coords[0]), "y": float(coords[1]), "z": float(coords[2])})
             elif t == "voice":
                 # WebRTC signaling. Tag the sender; deliver to one peer if a
                 # target id is given, otherwise to the whole room.
@@ -476,24 +601,27 @@ async def world_ws(ws: WebSocket, wid: str):
                 else:
                     for w2, st in list(room.items()):
                         if st["id"] == target:
-                            try:
-                                await w2.send_json(out)
-                            except Exception:
-                                pass
+                            await _send_safe(w2, out)
                             break
-    except (WebSocketDisconnect, KeyError, TypeError, ValueError):
+    except WebSocketDisconnect:
         pass
+    except Exception:
+        log.exception("world_ws: unexpected error (player %s, world %s)", pid, wid)
     finally:
         room.pop(ws, None)
         await _broadcast(room, None, {"type": "leave", "id": pid})
-        if not room:
+        # Only tear the room down if it's still *this* room: after a revert
+        # kick, a fresh room may already live under the same wid, and popping
+        # that one would strand its players in an orphaned room.
+        if not room and _rooms.get(wid) is room:
             _rooms.pop(wid, None)
             # Last player left — flush any write-behind edits to disk, then
-            # capture the session's final state (unless we got here because of a
-            # revert, which already just snapshotted).
-            store.flush(wid)
+            # capture the session's final state (unless we got here because of
+            # a revert, which already just snapshotted). Both touch the disk,
+            # so keep them off the event loop.
+            await asyncio.to_thread(store.flush, wid)
             if wid not in _reverting:
-                store.snapshot_now(wid, label="session end")
+                await asyncio.to_thread(store.snapshot_now, wid, label="session end")
 
 
 # --- Health / assets ---------------------------------------------------------

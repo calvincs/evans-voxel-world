@@ -16,11 +16,16 @@ last day is kept, older ones are thinned to one per hour for a week, then droppe
 import json
 import os
 import random
+import re
 import threading
 import time
 
 DAY = 24 * 3600
 WEEK = 7 * DAY
+
+# Snapshot ids are "<unix ts>_<hex suffix>" (see _new_id). Anything else —
+# especially anything with path separators — never touches the filesystem.
+_SNAPID_RE = re.compile(r"[0-9]+_[0-9a-f]+")
 
 
 def _now() -> int:
@@ -104,6 +109,8 @@ class SnapshotStore:
         return self._last_ts[wid]
 
     def get(self, wid: str, snapid: str) -> dict | None:
+        if not isinstance(snapid, str) or not _SNAPID_RE.fullmatch(snapid):
+            return None                  # client-supplied id: no path traversal
         path = self._path(wid, snapid)
         if not os.path.exists(path):
             return None

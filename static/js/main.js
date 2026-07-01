@@ -372,6 +372,31 @@ function chooseWorld() {
           hist.onclick = (e) => { e.stopPropagation(); openHistory(w.id, w.name); };
           row.appendChild(hist);
 
+          const ren = document.createElement('button');
+          ren.className = 'world-hist'; ren.title = 'Rename world'; ren.textContent = '✏️';
+          ren.onclick = async (e) => {
+            e.stopPropagation();
+            const name = prompt('New name for this world:', w.name);
+            if (name && name.trim()) {
+              await req('POST', `/api/worlds/${w.id}/rename`, { name: name.trim() });
+              refresh();
+            }
+          };
+          row.appendChild(ren);
+
+          const pea = document.createElement('button');
+          pea.className = 'world-hist';
+          pea.title = w.peaceful
+            ? 'Peaceful is ON — animals are all friendly. Tap for normal.'
+            : 'Peaceful is OFF — wolves & spiders can attack. Tap for peaceful.';
+          pea.textContent = w.peaceful ? '🕊️' : '⚔️';
+          pea.onclick = async (e) => {
+            e.stopPropagation();
+            await req('POST', `/api/worlds/${w.id}/peaceful`, { peaceful: !w.peaceful });
+            refresh();
+          };
+          row.appendChild(pea);
+
           const vis = document.createElement('button');
           vis.className = 'world-hist';
           vis.title = w.public ? 'Make private' : 'Make public';
@@ -427,6 +452,7 @@ async function startGame(worldId, demo) {
   const canvas = $('game');
   const { renderer, scene, camera } = createRenderer(canvas);
   const sky = new Sky(scene);
+  if (cfg.serverNow) sky.syncTo(cfg.serverNow);   // everyone shares the same night
   const atlas = await buildAtlasTexture(assets.textures);
 
   const world = new World(scene, atlas, worldId);
@@ -445,16 +471,24 @@ async function startGame(worldId, demo) {
   const BLAST_HURT_R = 6;
   const blastHurt = (x, y, z) => {
     const d = Math.hypot(player.pos.x - (x + 0.5), (player.pos.y + 0.9) - (y + 0.5), player.pos.z - (z + 0.5));
-    if (d < BLAST_HURT_R) player.hurt(Math.ceil((1 - d / BLAST_HURT_R) * 8));
+    if (d < BLAST_HURT_R) {
+      player.hurt(Math.ceil((1 - d / BLAST_HURT_R) * 8),
+        { from: { x: x + 0.5, z: z + 0.5 }, source: 'blast' });
+    }
   };
   const blastFelt = (x, y, z) => { feltShake(x, y, z); blastHurt(x, y, z); };
   world.onExplosion = (x, y, z) => blastFelt(x, y, z);
 
   if (isTouch) setupTouchControls(player);
+  // Restore the player's customized hotbar (saved with their position).
+  if (cfg.player && Array.isArray(cfg.player.hotbar)) {
+    cfg.player.hotbar.slice(0, HOTBAR.length).forEach((b, i) => { if (BLOCKS[b]) HOTBAR[i] = b; });
+  }
   buildHotbar(atlas.image, player);
   world.update(spawn.x, spawn.z);   // preload spawn chunks
 
   const mobs = new Mobs(scene, world, assets.textures);   // wandering animals (+ optional skins)
+  mobs.peaceful = !!cfg.peaceful;                         // world toggle: friendly animals only
   player.mobs = mobs;                                     // let a swing hit creatures
 
   // Health HUD + damage feedback + death.
@@ -475,13 +509,26 @@ async function startGame(worldId, demo) {
     player.shake(0.5);
   };
   player.onHeal = (hp, max) => renderHealth(hp, max);   // slow out-of-combat regen
+  const DEATH_MSG = {
+    wolf: 'A wolf got you!', spider: 'A spider got you!', squid: 'A squid got you!',
+    blast: 'You got caught in an explosion!',
+  };
   player.onDeath = () => {
     dead = true;
     if (document.pointerLockElement) document.exitPointerLock();
     renderHealth(0, player.maxHp);
+    $('dead-msg').textContent = DEATH_MSG[player.lastDamage] || 'A creature got you.';
     $('dead').classList.remove('hidden');
   };
-  $('dead-rejoin').onclick = () => location.reload();   // rejoin the world fresh
+  // Respawn in place at the world spawn — no page reload (which used to drop
+  // you back exactly where you died, sometimes straight into the same wolf).
+  $('dead-rejoin').onclick = () => {
+    $('dead').classList.add('hidden');
+    player.respawn(cfg.spawn);
+    renderHealth();
+    dead = false;
+    player.engage();
+  };
 
   // Multiplayer: stream our position and apply others' edits + movements.
   const remotes = new RemotePlayers(scene);
@@ -490,9 +537,26 @@ async function startGame(worldId, demo) {
   const voiceIds = new Set();     // ids currently in voice
   const rosterEls = new Map();    // id -> roster row element (for speaking highlight)
   const net = new Net(worldId, myName, {
-    onWelcome: (id, players) => { players.forEach((p) => { remotes.add(p); roster.set(p.id, { name: p.name }); }); renderRoster(); },
+    onWelcome: (id, players) => {
+      // The welcome roster is authoritative: rebuild from scratch so players
+      // who left while we were disconnected don't linger as frozen ghosts.
+      remotes.clear(); roster.clear();
+      players.forEach((p) => { remotes.add(p); roster.set(p.id, { name: p.name }); });
+      renderRoster();
+    },
+    onReconnect: () => {
+      // Edits broadcast while the socket was down are gone for good — refetch
+      // the loaded chunks so our world matches the server again.
+      world.refreshAll();
+      voice.rejoin();               // old pid's peer links are orphaned
+      renderRoster();
+    },
     onJoin: (p) => { remotes.add(p); roster.set(p.id, { name: p.name }); renderRoster(); },
-    onLeave: (id) => { remotes.remove(id); roster.delete(id); voiceIds.delete(id); renderRoster(); },
+    onLeave: (id) => {
+      remotes.remove(id); roster.delete(id); voiceIds.delete(id);
+      voice.handle({ sub: 'leave', from: id });   // tear down their voice peer too
+      renderRoster();
+    },
     onPos: (m) => remotes.setPos(m),
     onEdit: (m) => {
       const pos = { x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 };
@@ -663,6 +727,7 @@ async function startGame(worldId, demo) {
 
   const prevOnEngage = player.onEngage;
   player.onEngage = () => { overlay.classList.add('hidden'); if (prevOnEngage) prevOnEngage(); };
+  player.onPause = () => overlay.classList.remove('hidden');   // touch ⏸ button
   overlay.addEventListener('click', () => player.engage());
   $('play').addEventListener('click', (e) => { e.stopPropagation(); player.engage(); });
   $('worlds').addEventListener('click', (e) => { e.stopPropagation(); location.reload(); });
@@ -708,6 +773,7 @@ async function startGame(worldId, demo) {
   function pickBlock(block) {
     HOTBAR[player.selected] = block;            // load it into the active slot
     updateHotbarSlot(player.selected, atlasImg);
+    toast(BLOCKS[block].name, 1500);            // names are tooltip-only otherwise
     closeInventory(true);
   }
   function openInventory() {
@@ -731,7 +797,10 @@ async function startGame(worldId, demo) {
       if (inventoryOpen) closeInventory(true);
       else if (player.locked) openInventory();
     } else if (e.code === 'Escape' && inventoryOpen) {
+      // Esc closes without relocking, which is a pause — show the overlay so
+      // the player isn't stranded on an empty screen with no pointer lock.
       closeInventory(false);
+      if (!isTouch) overlay.classList.remove('hidden');
     }
   });
 
@@ -770,7 +839,9 @@ async function startGame(worldId, demo) {
   function loop() {
     requestAnimationFrame(loop);
     if (offline || dead) { renderer.render(scene, camera); return; }   // frozen while disconnected / dead
-    const dt = clock.getDelta();
+    // Clamp dt: after a backgrounded tab getDelta() returns the whole absence
+    // (minutes!), which would drive physics substeps for millions of iterations.
+    const dt = Math.min(clock.getDelta(), 0.1);
     player.update(dt);
     audio.setListener(player.pos.x, player.pos.y + 1.62, player.pos.z, player.yaw);
     sky.update(dt, player.pos);
@@ -778,7 +849,7 @@ async function startGame(worldId, demo) {
     mobs.update(dt, player, sky.daylight);
 
     // Multiplayer sync.
-    if (player.locked) net.sendPos(player.state(), performance.now());
+    if (player.locked) net.sendPos(player.posState(), performance.now());
     remotes.update(dt);
     voice.update();
     // Reflect who's talking on characters + roster.
@@ -791,7 +862,12 @@ async function startGame(worldId, demo) {
       Math.floor(player.pos.y + 1.62), Math.floor(player.pos.z)) === WATER;
     underwaterEl.classList.toggle('on', submerged);
 
-    if (player.selected !== lastSel) { highlightSlot(player.selected); lastSel = player.selected; }
+    if (player.selected !== lastSel) {
+      highlightSlot(player.selected);
+      // Name the block you just switched to (tooltips don't exist on touch).
+      if (lastSel !== -1) toast(BLOCKS[HOTBAR[player.selected]].name, 1200);
+      lastSel = player.selected;
+    }
     // Only touch the DOM when the shown text actually changes (most frames it
     // doesn't — coords are whole numbers and the clock ticks once a minute).
     const cstr =
@@ -839,8 +915,10 @@ function buildHotbar(atlasCanvas, player) {
 
 // Redraw one hotbar slot's icon (after the inventory changes its block).
 function updateHotbarSlot(i, atlasCanvas) {
-  const cv = document.querySelectorAll('#hotbar .slot canvas')[i];
-  if (cv) { cv.title = BLOCKS[HOTBAR[i]].name; drawBlockIcon(cv, atlasCanvas, HOTBAR[i], 36); }
+  const slot = document.querySelectorAll('#hotbar .slot')[i];
+  if (!slot) return;
+  slot.title = BLOCKS[HOTBAR[i]].name;   // the slot owns the tooltip, not the canvas
+  drawBlockIcon(slot.querySelector('canvas'), atlasCanvas, HOTBAR[i], 36);
 }
 
 function highlightSlot(i) {

@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { DIM } from './engine/constants.js';
 import { isSolid, GRASS, WATER } from './blocks.js';
+import * as audio from './audio.js';
 
 // Each animal picks a body plan (shape) and its colours/sizes/speed. `aquatic`
 // marks water-only creatures. When /static/textures/mob_<type>.png exists it is
@@ -217,6 +218,8 @@ class Mob {
     this.hostile = !!t.hostile;
     this.attackCd = 0;
     this.hurtFlash = 0;
+    this.chasing = false;        // was chasing last frame (gates the growl)
+    this.kbx = 0; this.kbz = 0;  // knockback impulse, decays over time
 
     this.group = new THREE.Group();
     const skin = SKIN[type];
@@ -248,9 +251,15 @@ class Mob {
     return (out || new THREE.Vector3()).set(this.pos.x, this.pos.y + yc, this.pos.z);
   }
 
-  hurt(dmg) {
+  // `dir` (optional, unit-ish vector) knocks the creature away from the blow —
+  // without it a wolf just stands in your face trading hits.
+  hurt(dmg, dir) {
     this.hp -= dmg;
     this.hurtFlash = 0.14;
+    if (dir) {
+      this.kbx = dir.x * 7; this.kbz = dir.z * 7;
+      if (!this.aquatic && this.onGround) this.vel.y = Math.max(this.vel.y, 4.5);
+    }
     for (const m of this.flashMats) if (m.emissive) m.emissive.setHex(0x661111);
   }
 
@@ -258,7 +267,7 @@ class Mob {
   _tryAttack(player, dist) {
     if (dist <= ATTACK_RANGE && this.attackCd <= 0 &&
         player && player.locked && !player.frozen && !player.dead) {
-      player.hurt(this.t.attack || 1);
+      player.hurt(this.t.attack || 1, { from: this.pos, source: this.type });
       this.attackCd = ATTACK_INTERVAL;
     }
   }
@@ -338,6 +347,8 @@ class Mob {
         this._tryAttack(player, dist);
       }
     }
+    if (chasing && !this.chasing) audio.playGrowl(this.pos);   // fair warning!
+    this.chasing = chasing;
 
     let dy = this.targetYaw - this.yaw;
     while (dy > Math.PI) dy -= 2 * Math.PI;
@@ -351,15 +362,26 @@ class Mob {
       const ax = Math.floor(this.pos.x + fx * 0.7), az = Math.floor(this.pos.z + fz * 0.7);
       const groundAhead = isSolid(world.getBlock(ax, Math.floor(this.pos.y - 0.4), az)) ||
                           isSolid(world.getBlock(ax, Math.floor(this.pos.y - 1.2), az));
+      // Water counts as a cliff: land animals shouldn't stroll into lakes (and
+      // wolves can't chase you in where you out-swim them).
+      const waterAhead = world.getBlock(ax, Math.floor(this.pos.y + 0.1), az) === WATER ||
+                         world.getBlock(ax, Math.floor(this.pos.y - 0.4), az) === WATER;
       // Don't walk off cliffs — but a chasing hostile just stops at the edge
       // instead of turning away, so it stays locked on.
-      if (!groundAhead) { speed = 0; if (!chasing) { this.walking = false; this.timer = 0.4; this.targetYaw = this.yaw + 2.2; } }
+      if (!groundAhead || waterAhead) { speed = 0; if (!chasing) { this.walking = false; this.timer = 0.4; this.targetYaw = this.yaw + 2.2; } }
     }
 
-    this.vel.x = fx * speed;
-    this.vel.z = fz * speed;
+    // Knockback fades fast; it rides on top of the walk velocity.
+    this.kbx *= Math.max(0, 1 - dt * 6); this.kbz *= Math.max(0, 1 - dt * 6);
+    this.vel.x = fx * speed + this.kbx;
+    this.vel.z = fz * speed + this.kbz;
     this.vel.y -= GRAVITY * dt;
     if (this.vel.y < -40) this.vel.y = -40;
+    // Fell in anyway (knockback, collapsing shoreline)? Float up so it can
+    // paddle out instead of trudging along the lakebed.
+    if (world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.2), Math.floor(this.pos.z)) === WATER) {
+      this.vel.y = Math.max(this.vel.y, 1.5);
+    }
 
     if (this._stepMove(world, 'x', this.vel.x * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.x = 0; }
     if (this._stepMove(world, 'z', this.vel.z * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.z = 0; }
@@ -390,7 +412,8 @@ class Mob {
 
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
     const spd = this.t.speed;
-    const nx = this.pos.x + fx * spd * dt, nz = this.pos.z + fz * spd * dt;
+    this.kbx *= Math.max(0, 1 - dt * 4); this.kbz *= Math.max(0, 1 - dt * 4);
+    const nx = this.pos.x + (fx * spd + this.kbx) * dt, nz = this.pos.z + (fz * spd + this.kbz) * dt;
     // Only advance into water; a wall of terrain or the shore turns it around.
     if (this._inWater(world, nx, this.pos.y, nz)) { this.pos.x = nx; this.pos.z = nz; }
     else { this.targetYaw = this.yaw + 2.4; this.timer = Math.min(this.timer, 0.4); }
@@ -443,11 +466,14 @@ export class Mobs {
     this.world = world;
     this.mobs = [];
     this.spawnTimer = 2;
+    this.peaceful = false;    // per-world toggle: hostiles neither spawn nor attack
     loadMobSkins(textures);   // use any /static/textures/mob_<type>.png that exist
   }
 
   update(dt, player, daylight = 1) {
     const playerPos = player.pos;
+    // In peaceful mode mobs never see the player, which disables chase + bite.
+    const target = this.peaceful ? null : player;
     // Keep the world populated: top up toward the target count, refilling faster
     // while we're short (e.g. just after something was killed or wandered off).
     this.spawnTimer -= dt;
@@ -458,9 +484,10 @@ export class Mobs {
     }
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
-      m.update(dt, this.world, player);
+      m.update(dt, this.world, target);
       if (m.hp <= 0) {   // killed — puff of its body colour, remove, and reseed
         this.world.spawnBreakBurst(m.pos.x, m.pos.y + 0.4, m.pos.z, m.t.body);
+        audio.playMobDeath({ x: m.pos.x, y: m.pos.y + 0.4, z: m.pos.z });
         m.dispose(); this.mobs.splice(i, 1);
         this._reseed(m.type, playerPos, daylight);   // replacement appears elsewhere
         continue;
@@ -484,7 +511,8 @@ export class Mobs {
       if (dist < bestDist) { bestDist = dist; best = m; }
     }
     if (!best) return false;
-    best.hurt(PLAYER_DMG);
+    best.hurt(PLAYER_DMG, dir);                  // knocked back along the swing
+    audio.playMobHit({ x: best.pos.x, y: best.pos.y + 0.4, z: best.pos.z });
     return true;
   }
 
@@ -517,6 +545,7 @@ export class Mobs {
   // Try to place one mob of `type` away from the player. Returns true if spawned.
   _spawnType(type, playerPos, daylight) {
     const t = TYPES[type];
+    if (this.peaceful && t.hostile) return false;      // friendly animals only
     if (t.night && daylight >= 0.35) return false;     // nocturnal, and it's daytime
     const spot = t.aquatic ? this._findWaterSpot(playerPos) : this._findLandSpot(playerPos);
     if (!spot) return false;
@@ -531,7 +560,8 @@ export class Mobs {
       this._spawnType(WATER_KEYS[Math.floor(Math.random() * WATER_KEYS.length)], playerPos, daylight);
       return;
     }
-    const pool = LAND_KEYS.filter((k) => night || !TYPES[k].night);
+    const pool = LAND_KEYS.filter((k) => (night || !TYPES[k].night)
+      && !(this.peaceful && TYPES[k].hostile));
     if (pool.length) this._spawnType(pool[Math.floor(Math.random() * pool.length)], playerPos, daylight);
   }
 

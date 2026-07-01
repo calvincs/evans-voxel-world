@@ -20,6 +20,7 @@ export function setupTouchControls(player) {
   const btnPlace = make('div', 'btn-place', 'touch-btn', root, '◼');
   const btnJump = make('div', 'btn-jump', 'touch-btn', root, '⭡');
   const btnView = make('div', 'btn-view', 'touch-btn', root, '👁');
+  const btnMenu = make('div', 'btn-menu', 'touch-btn', root, '⏸');
 
   // Revealed by main.js when the player engages.
   player.onEngage = () => root.classList.remove('hidden');
@@ -94,7 +95,20 @@ export function setupTouchControls(player) {
       { passive: false });
   };
   press(btnJump, () => { player.wantJump = true; }, () => { player.wantJump = false; });
-  press(btnBreak, () => player._break());
-  press(btnPlace, () => player._place());
+  // Hold to keep mining / placing (kids expect Minecraft's hold-to-dig).
+  press(btnBreak, () => player.beginBreak(), () => player.endBreak());
+  press(btnPlace, () => player.beginPlace(), () => player.endPlace());
   press(btnView, () => player.toggleView());
+
+  // Pause: touch has no Esc, so without this an iPad player can never reach
+  // the menu. Not routed through press() — it must work while locked.
+  btnMenu.addEventListener('touchstart', (e) => {
+    if (!player.locked) return;
+    e.preventDefault();
+    endJoy();
+    player.wantJump = false;
+    player.endBreak(); player.endPlace();
+    player.locked = false;
+    if (player.onPause) player.onPause();
+  }, { passive: false });
 }

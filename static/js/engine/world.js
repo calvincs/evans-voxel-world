@@ -28,6 +28,20 @@ export class World {
     this.chunks = new Map();
     this.pending = new Set();
     this.net = null;          // set in multiplayer; edits go over the socket
+    this._retryAt = new Map();   // failed chunk fetches back off instead of hammering
+    this._gen = 0;               // bumped by clearAll so stale fetches get discarded
+
+    // Ring of chunk offsets inside the render distance, sorted nearest-first.
+    // Computed once — the per-frame streaming scan reuses it.
+    this._ring = [];
+    for (let dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++)
+      for (let dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= RENDER_DISTANCE * RENDER_DISTANCE) this._ring.push({ dx, dz, d2 });
+      }
+    this._ring.sort((a, b) => a.d2 - b.d2);
+    this._scanT = 0;
+    this._lastCcx = null; this._lastCcz = null;
 
     // TNT state.
     this.fuses = [];          // [{x,y,z,key,t,mesh}]
@@ -64,14 +78,19 @@ export class World {
 
     // Glowstone light sources. We track every glowstone position and let a
     // small pool of point lights follow the nearest ones to the player, so the
-    // light count stays bounded no matter how many are placed.
-    this.glowKeys = new Set();   // "x,y,z" of every loaded glowstone
+    // light count stays bounded no matter how many are placed. The lights stay
+    // visible (intensity 0 when idle): three.js keys shader programs on the
+    // active light count, so toggling visibility forces program recompiles —
+    // a burst of frame hitches right at nightfall.
+    this.glow = new Map();       // "x,y,z" -> [gx, gy, gz] for every loaded glowstone
     this._glowT = 0;
+    this._glowAssignT = 1;       // force an assignment on the first night frame
+    this._glowDirty = true;
+    this._glowSlots = new Array(GLOW_LIGHTS).fill(null);
     this._px = 0; this._pz = 0;
     this.glowLights = [];
     for (let i = 0; i < GLOW_LIGHTS; i++) {
       const L = new THREE.PointLight(GLOW_COLOR, 0, GLOW_LIGHT_DIST, 1.7);
-      L.visible = false;
       this.scene.add(L);
       this.glowLights.push(L);
     }
@@ -127,8 +146,8 @@ export class World {
 
     // Keep the glowstone light index in sync.
     const gk = `${wx},${wy},${wz}`;
-    if (block === GLOWSTONE) this.glowKeys.add(gk);
-    else if (prev === GLOWSTONE) this.glowKeys.delete(gk);
+    if (block === GLOWSTONE) { this.glow.set(gk, [wx, wy, wz]); this._glowDirty = true; }
+    else if (prev === GLOWSTONE) { this.glow.delete(gk); this._glowDirty = true; }
 
     this._markDirty(cx, cz);
     if (lx === 0) this._markDirty(cx - 1, cz);
@@ -172,8 +191,9 @@ export class World {
     const seen = new Set([`${sx},${sy},${sz}`]);
     const queue = [[sx, sy, sz]];
     const filled = [];
-    while (queue.length && filled.length < CAP) {
-      const [x, y, z] = queue.shift();
+    let qi = 0;                                     // index pointer: shift() is O(n)
+    while (qi < queue.length && filled.length < CAP) {
+      const [x, y, z] = queue[qi++];
       this.setBlock(x, y, z, WATER, false);         // local only; batch-sent below
       filled.push({ x, y, z, block: WATER });
       for (const [dx, dy, dz] of N) {
@@ -204,20 +224,52 @@ export class World {
   async _loadChunk(cx, cz) {
     const k = key(cx, cz);
     if (this.chunks.has(k) || this.pending.has(k)) return;
+    if ((this._retryAt.get(k) || 0) > performance.now()) return;
     this.pending.add(k);
+    const gen = this._gen;
     try {
       const res = await fetch(`${this.base}/chunk/${cx}/${cz}`);
+      // fetch() resolves on HTTP errors too — without these checks an error
+      // body would be installed as block data (invisible-but-solid terrain).
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = new Uint8Array(await res.arrayBuffer());   // raw block bytes
+      if (data.length !== DIM.CX * DIM.CZ * DIM.WY)
+        throw new Error(`bad chunk payload (${data.length} bytes)`);
+      if (gen !== this._gen) return;        // world was reset while this was in flight
+      this._retryAt.delete(k);
       this.chunks.set(k, new Chunk(cx, cz, data));
       this._scanGlow(cx, cz, data, true);   // index any glowstones in this chunk
       // Neighbours can now cull their shared border faces.
       this._markDirty(cx - 1, cz); this._markDirty(cx + 1, cz);
       this._markDirty(cx, cz - 1); this._markDirty(cx, cz + 1);
     } catch (e) {
+      this._retryAt.set(k, performance.now() + 3000);   // back off, don't hammer
       console.warn('chunk load failed', cx, cz, e);
     } finally {
       this.pending.delete(k);
     }
+  }
+
+  // After a reconnect: refetch every loaded chunk in place, so edits that were
+  // missed while the socket was down get applied (no visual blank-out — the old
+  // mesh stands until the fresh data swaps in and rebuilds).
+  refreshAll() {
+    for (const chunk of this.chunks.values()) this._refetchChunk(chunk);
+  }
+
+  async _refetchChunk(chunk) {
+    const gen = this._gen;
+    try {
+      const res = await fetch(`${this.base}/chunk/${chunk.cx}/${chunk.cz}`);
+      if (!res.ok) return;
+      const data = new Uint8Array(await res.arrayBuffer());
+      if (data.length !== chunk.data.length || gen !== this._gen) return;
+      if (!this.chunks.has(key(chunk.cx, chunk.cz))) return;   // evicted meanwhile
+      this._scanGlow(chunk.cx, chunk.cz, chunk.data, false);
+      chunk.data = data;
+      this._scanGlow(chunk.cx, chunk.cz, data, true);
+      chunk.dirty = true;
+    } catch (_) { /* still offline — the health monitor owns that state */ }
   }
 
   // Called every frame: stream chunks in around the player, evict far ones,
@@ -231,64 +283,75 @@ export class World {
     this._updateGlow(daylight, dt);
     const ccx = floorDiv(px, DIM.CX), ccz = floorDiv(pz, DIM.CZ);
 
-    // Request nearest-first.
-    const wanted = [];
-    for (let dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++)
-      for (let dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
-        const d2 = dx * dx + dz * dz;
-        if (d2 > RENDER_DISTANCE * RENDER_DISTANCE) continue;
-        wanted.push({ cx: ccx + dx, cz: ccz + dz, d2 });
+    // Streaming scan: the ring is precomputed and nearest-first, so this is
+    // just key lookups — and with everything loaded it's pure churn, so only
+    // rescan when the player crosses a chunk border or every few frames.
+    const crossed = ccx !== this._lastCcx || ccz !== this._lastCcz;
+    this._scanT = crossed ? 0 : (this._scanT + 1) % 6;
+    if (crossed || this._scanT === 0) {
+      this._lastCcx = ccx; this._lastCcz = ccz;
+      let loadBudget = 3;
+      for (const w of this._ring) {
+        if (loadBudget <= 0) break;
+        const k = key(ccx + w.dx, ccz + w.dz);
+        if (!this.chunks.has(k) && !this.pending.has(k)) {
+          this._loadChunk(ccx + w.dx, ccz + w.dz);
+          loadBudget--;
+        }
       }
-    wanted.sort((a, b) => a.d2 - b.d2);
-
-    let loadBudget = 3;
-    for (const w of wanted) {
-      if (loadBudget <= 0) break;
-      const k = key(w.cx, w.cz);
-      if (!this.chunks.has(k) && !this.pending.has(k)) {
-        this._loadChunk(w.cx, w.cz);
-        loadBudget--;
-      }
-    }
-
-    // Evict chunks outside the keep radius.
-    const keep = RENDER_DISTANCE + 1;
-    for (const [k, chunk] of this.chunks) {
-      if (Math.abs(chunk.cx - ccx) > keep || Math.abs(chunk.cz - ccz) > keep) {
-        this._scanGlow(chunk.cx, chunk.cz, chunk.data, false);  // un-index glowstones
-        chunk.dispose(this);
-        this.chunks.delete(k);
+      // Evict chunks outside the keep radius.
+      const keep = RENDER_DISTANCE + 1;
+      for (const [k, chunk] of this.chunks) {
+        if (Math.abs(chunk.cx - ccx) > keep || Math.abs(chunk.cz - ccz) > keep) {
+          this._scanGlow(chunk.cx, chunk.cz, chunk.data, false);  // un-index glowstones
+          chunk.dispose(this);
+          this.chunks.delete(k);
+        }
       }
     }
 
-    // Rebuild dirty meshes, nearest first, a few per frame.
-    let buildBudget = 4;
-    const dirty = [];
+    // Rebuild dirty meshes, nearest first, on a *time* budget: a fixed count
+    // stalls low-end machines when TNT/water dirties a dozen chunks at once.
+    let anyDirty = false;
     for (const chunk of this.chunks.values()) {
-      if (chunk.dirty) {
-        const dx = chunk.cx - ccx, dz = chunk.cz - ccz;
-        dirty.push({ chunk, d2: dx * dx + dz * dz });
-      }
+      if (chunk.dirty) { anyDirty = true; break; }
     }
-    dirty.sort((a, b) => a.d2 - b.d2);
-    for (const { chunk } of dirty) {
-      if (buildBudget <= 0) break;
-      chunk.build(this);
-      buildBudget--;
+    if (anyDirty) {
+      const dirty = [];
+      for (const chunk of this.chunks.values()) {
+        if (chunk.dirty) {
+          const dx = chunk.cx - ccx, dz = chunk.cz - ccz;
+          dirty.push({ chunk, d2: dx * dx + dz * dz });
+        }
+      }
+      dirty.sort((a, b) => a.d2 - b.d2);
+      const deadline = performance.now() + 6;   // ms of meshing per frame, max
+      for (const { chunk } of dirty) {
+        chunk.build(this);                       // always at least one
+        if (performance.now() > deadline) break;
+      }
     }
   }
 
   // Drop every loaded chunk so the world re-streams from scratch (used after
   // resetting to a fresh world, without a full page reload).
   clearAll() {
+    this._gen++;                 // in-flight fetches from the old world are stale now
     for (const chunk of this.chunks.values()) chunk.dispose(this);
     this.chunks.clear();
     this.pending.clear();
+    this._retryAt.clear();
     for (const f of this.fuses) this.scene.remove(f.mesh);
-    for (const p of this.particles) { this.scene.remove(p.points); p.points.geometry.dispose(); }
+    for (const p of this.particles) {
+      this.scene.remove(p.points);
+      p.points.geometry.dispose();
+      p.points.material.dispose();
+    }
     this.fuses = []; this.fuseKeys.clear(); this.particles = [];
-    this.glowKeys.clear();
-    for (const L of this.glowLights) { L.visible = false; L.intensity = 0; }
+    this.glow.clear();
+    this._glowDirty = true;
+    this._glowSlots.fill(null);
+    for (const L of this.glowLights) L.intensity = 0;
   }
 
   // --- Glowstone lighting ---------------------------------------------------
@@ -300,8 +363,10 @@ export class World {
       const x = i % CX;
       const z = Math.floor(i / CX) % CZ;
       const y = Math.floor(i / (CX * CZ));
-      const k = `${cx * CX + x},${y},${cz * CZ + z}`;
-      if (add) this.glowKeys.add(k); else this.glowKeys.delete(k);
+      const gx = cx * CX + x, gz = cz * CZ + z;
+      const k = `${gx},${y},${gz}`;
+      if (add) this.glow.set(k, [gx, y, gz]); else this.glow.delete(k);
+      this._glowDirty = true;
     }
   }
 
@@ -319,32 +384,39 @@ export class World {
     this.materials.glow.emissiveIntensity = 0.3 + night * 0.95 * flick;
 
     const lights = this.glowLights;
-    if (night < 0.03 || this.glowKeys.size === 0) {
-      for (const L of lights) { L.visible = false; L.intensity = 0; }
+    if (night < 0.03 || this.glow.size === 0) {
+      for (const L of lights) L.intensity = 0;   // never toggle .visible (recompiles)
       return;
     }
     // Hand the light pool to the nearest glowstones (horizontal distance).
-    const px = this._px, pz = this._pz;
-    const near = [];
-    for (const kk of this.glowKeys) {
-      const c = kk.split(',');
-      const gx = +c[0], gy = +c[1], gz = +c[2];
-      const dx = gx + 0.5 - px, dz = gz + 0.5 - pz;
-      const d2 = dx * dx + dz * dz;
-      if (d2 <= GLOW_RANGE * GLOW_RANGE) near.push({ gx, gy, gz, d2 });
+    // Assignment only changes as the player moves, so recompute it a few times
+    // a second instead of sorting every frame; flicker stays per-frame.
+    this._glowAssignT += dt;
+    if (this._glowDirty || this._glowAssignT >= 0.15) {
+      this._glowAssignT = 0;
+      this._glowDirty = false;
+      const px = this._px, pz = this._pz;
+      const near = [];
+      for (const g of this.glow.values()) {
+        const dx = g[0] + 0.5 - px, dz = g[2] + 0.5 - pz;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= GLOW_RANGE * GLOW_RANGE) near.push({ g, d2 });
+      }
+      near.sort((a, b) => a.d2 - b.d2);
+      for (let i = 0; i < lights.length; i++) {
+        const g = i < near.length ? near[i].g : null;
+        this._glowSlots[i] = g;
+        if (g) lights[i].position.set(g[0] + 0.5, g[1] + 0.5, g[2] + 0.5);
+      }
     }
-    near.sort((a, b) => a.d2 - b.d2);
     for (let i = 0; i < lights.length; i++) {
-      const L = lights[i];
-      if (i < near.length) {
-        const g = near[i];
-        L.position.set(g.gx + 0.5, g.gy + 0.5, g.gz + 0.5);
-        const ph = (g.gx * 7 + g.gy * 13 + g.gz * 5) % 7;          // per-light phase
+      const g = this._glowSlots[i];
+      if (g) {
+        const ph = (g[0] * 7 + g[1] * 13 + g[2] * 5) % 7;          // per-light phase
         const lf = 0.82 + 0.16 * Math.sin(t * 9 + ph) + 0.08 * Math.sin(t * 15 + ph * 1.7);
-        L.intensity = night * lf * GLOW_LIGHT_POWER;
-        L.visible = true;
+        lights[i].intensity = night * lf * GLOW_LIGHT_POWER;
       } else {
-        L.visible = false; L.intensity = 0;
+        lights[i].intensity = 0;
       }
     }
   }
@@ -470,6 +542,7 @@ export class World {
       if (p.life <= 0) {
         this.scene.remove(p.points);
         p.points.geometry.dispose();
+        p.points.material.dispose();
         this.particles.splice(i, 1);
       }
     }

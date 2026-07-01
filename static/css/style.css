@@ -629,6 +629,8 @@ body:not(.in-game) #talk { display: none !important; }
 #btn-break { right: 124px; bottom: 46px; }
 #btn-place { right: 46px;  bottom: 126px; }
 #btn-view  { right: 130px; bottom: 134px; width: 54px; height: 54px; line-height: 48px; font-size: 24px; }
+/* Pause sits with the music/voice/bag corner buttons (top-left holds the HUD). */
+#btn-menu  { right: 160px; top: 10px;     width: 42px; height: 42px; line-height: 38px; font-size: 18px; }
 
 /* On touch screens lift the hotbar above the on-screen buttons. */
 @media (pointer: coarse) {

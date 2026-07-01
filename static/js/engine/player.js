@@ -18,9 +18,19 @@ const REACH = 6;
 const THIRD_DIST = 4.0;  // third-person camera distance
 const UP = new THREE.Vector3(0, 1, 0);
 
-// Health slowly returns once you've been out of danger for a while.
-const REGEN_DELAY = 60;      // seconds without taking damage before healing starts
-const REGEN_INTERVAL = 180;  // seconds per +1 heart thereafter
+// Water physics: sink slowly, hold Space (or the jump button) to swim up.
+const SWIM_GRAVITY = 5;
+const SWIM_SINK_MAX = -2.2;  // terminal sink speed
+const SWIM_UP = 4.5;         // upward swim speed — enough to breach and climb out
+const SWIM_DRAG = 0.65;      // horizontal speed factor in water
+
+// Health returns once you've been out of danger for a moment (kid-friendly).
+const REGEN_DELAY = 10;      // seconds without taking damage before healing starts
+const REGEN_INTERVAL = 5;    // seconds per +1 heart thereafter
+
+// Held break/place repeat while the button stays down (hold-to-mine).
+const ACT_FIRST_REPEAT = 0.3;
+const ACT_REPEAT = 0.25;
 
 // Forward vector from yaw/pitch (matches the camera's YXZ orientation).
 function lookDir(yaw, pitch, out) {
@@ -56,6 +66,11 @@ export class Player {
     this.onHurt = null;          // callback(hp, maxHp)
     this.onHeal = null;          // callback(hp, maxHp) on regen tick
     this.onDeath = null;         // callback() when hp hits 0
+    this.onPause = null;         // callback() when touch controls ask to pause
+    this.lastDamage = null;      // what hit us last ('wolf', 'blast', …) for the death screen
+    this.kb = new THREE.Vector3();  // knockback impulse, decays over time
+    this.inWater = false;
+    this._wasInWater = false;
 
     this.mobile = false;          // set true to use touch controls
     this.touchMove = { x: 0, y: 0 };  // joystick: x=strafe, y=forward (-1..1)
@@ -69,6 +84,19 @@ export class Player {
     this.character.setVisible(false);
     this._dir = new THREE.Vector3();
     this._speed = 0;
+
+    // Hold-to-mine / hold-to-place state.
+    this._holdBreak = false;
+    this._holdPlace = false;
+    this._actT = 0;
+
+    // Scratch vectors: the movement/targeting path runs every frame, so avoid
+    // allocating in it (GC hitches on tablets).
+    this._fwd = new THREE.Vector3();
+    this._right = new THREE.Vector3();
+    this._wish = new THREE.Vector3();
+    this._rayOrigin = new THREE.Vector3();
+    this._rayDir = new THREE.Vector3();
 
     // Wireframe highlight on the targeted block.
     const edges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002));
@@ -127,8 +155,12 @@ export class Player {
     this.dom.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('mousedown', (e) => {
       if (!this.locked || this.mobile) return;
-      if (e.button === 0) this._break();
-      else if (e.button === 2) this._place();
+      if (e.button === 0) this.beginBreak();
+      else if (e.button === 2) this.beginPlace();
+    });
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.endBreak();
+      else if (e.button === 2) this.endPlace();
     });
     // Scroll to change the selected block.
     document.addEventListener('wheel', (e) => {
@@ -137,8 +169,14 @@ export class Player {
     }, { passive: true });
   }
 
+  // Hold-to-mine / hold-to-place: act now, then repeat while held (see update).
+  beginBreak() { this._break(); this._holdBreak = true; this._actT = ACT_FIRST_REPEAT; }
+  endBreak() { this._holdBreak = false; }
+  beginPlace() { this._place(); this._holdPlace = true; this._actT = ACT_FIRST_REPEAT; }
+  endPlace() { this._holdPlace = false; }
+
   _forward() {
-    const f = new THREE.Vector3();
+    const f = this._fwd;
     this.camera.getWorldDirection(f);
     f.y = 0;
     return f.normalize();
@@ -192,9 +230,18 @@ export class Player {
       }
     }
 
+    // Are we in water? (feet or eye — either makes swim physics apply)
+    const feetIn = this.world.getBlock(Math.floor(this.pos.x),
+      Math.floor(this.pos.y + 0.4), Math.floor(this.pos.z)) === WATER;
+    const eyeIn = this.world.getBlock(Math.floor(this.pos.x),
+      Math.floor(this.pos.y + EYE), Math.floor(this.pos.z)) === WATER;
+    this.inWater = feetIn || eyeIn;
+    if (this.inWater && !this._wasInWater && this.vel.y < -3) audio.playSplash();
+    this._wasInWater = this.inWater;
+
     const f = this._forward();
-    const right = new THREE.Vector3().crossVectors(f, UP).normalize();
-    let wish = new THREE.Vector3();
+    const right = this._right.crossVectors(f, UP).normalize();
+    const wish = this._wish.set(0, 0, 0);
     if (this.keys.has('KeyW')) wish.add(f);
     if (this.keys.has('KeyS')) wish.sub(f);
     if (this.keys.has('KeyD')) wish.add(right);
@@ -203,19 +250,36 @@ export class Player {
     wish.addScaledVector(f, this.touchMove.y);
     wish.addScaledVector(right, this.touchMove.x);
 
-    const speed = this.keys.has('ShiftLeft') ? SPRINT : SPEED;
+    let speed = this.keys.has('ShiftLeft') ? SPRINT : SPEED;
+    if (this.inWater) speed *= SWIM_DRAG;
     if (wish.lengthSq() > 1) wish.normalize();   // cap diagonal/over-input
     wish.multiplyScalar(speed);
-    this.vel.x = wish.x;
-    this.vel.z = wish.z;
+    // Knockback rides on top of walk input and fades quickly.
+    this.kb.multiplyScalar(Math.max(0, 1 - dt * 6));
+    this.vel.x = wish.x + this.kb.x;
+    this.vel.z = wish.z + this.kb.z;
 
-    if ((this.keys.has('Space') || this.wantJump) && this.onGround) {
+    const wantUp = this.keys.has('Space') || this.wantJump;
+    if (wantUp && this.onGround) {
       this.vel.y = JUMP;
       this.onGround = false;
     }
 
-    this.vel.y -= GRAVITY * dt;
-    if (this.vel.y < -50) this.vel.y = -50;
+    if (this.inWater) {
+      // Swim: slow sink by default, hold jump to rise (and breach at the top).
+      // A real jump from the bottom keeps its impulse (normal gravity) so you
+      // can still hop out of knee-deep water.
+      if (wantUp) {
+        this.vel.y = this.vel.y > SWIM_UP ? this.vel.y - GRAVITY * dt
+          : Math.min(this.vel.y + 30 * dt, SWIM_UP);
+      } else {
+        this.vel.y -= SWIM_GRAVITY * dt;
+        if (this.vel.y < SWIM_SINK_MAX) this.vel.y = SWIM_SINK_MAX;
+      }
+    } else {
+      this.vel.y -= GRAVITY * dt;
+      if (this.vel.y < -50) this.vel.y = -50;
+    }
 
     if (this._moveAxis('x', this.vel.x * dt)) this.vel.x = 0;
     if (this._moveAxis('z', this.vel.z * dt)) this.vel.z = 0;
@@ -230,9 +294,18 @@ export class Player {
     // Footstep sounds, paced by ground distance travelled.
     const horiz = Math.hypot(this.vel.x, this.vel.z);
     this._speed = horiz;
-    if (this.onGround && horiz > 0.5) {
+    if (this.onGround && !this.inWater && horiz > 0.5) {
       this.stepDist += horiz * dt;
       if (this.stepDist > 1.9) { audio.playStep(); this.stepDist = 0; }
+    }
+
+    // Repeat break/place while the button is held (mouse or touch).
+    if (this._holdBreak || this._holdPlace) {
+      this._actT -= dt;
+      if (this._actT <= 0) {
+        this._actT = ACT_REPEAT;
+        if (this._holdBreak) this._break(); else this._place();
+      }
     }
 
     if (this.shakeTime > 0) this.shakeTime = Math.max(0, this.shakeTime - dt * 2.5);
@@ -288,8 +361,8 @@ export class Player {
   raycast() {
     // Always cast from the player's eye along the look direction, so block
     // targeting is identical in first and third person.
-    const origin = new THREE.Vector3(this.pos.x, this.pos.y + EYE, this.pos.z);
-    const dir = lookDir(this.yaw, this.pitch, new THREE.Vector3());
+    const origin = this._rayOrigin.set(this.pos.x, this.pos.y + EYE, this.pos.z);
+    const dir = lookDir(this.yaw, this.pitch, this._rayDir);
 
     let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
     const stepX = dir.x > 0 ? 1 : -1;
@@ -329,13 +402,22 @@ export class Player {
   }
 
   // Take damage, with a short invulnerability window so several mobs can't
-  // instantly gang-nuke you.
-  hurt(dmg) {
+  // instantly gang-nuke you. opts.from (a position) adds knockback away from
+  // the attacker; opts.source ('wolf', 'blast', …) feeds the death screen.
+  hurt(dmg, opts = {}) {
     if (this.dead || this.hurtCd > 0) return;
     this.hp = Math.max(0, this.hp - dmg);
     this.hurtCd = 0.5;
     this.sinceHurt = 0;          // taking damage restarts the regen clock
     this.regenAccum = 0;
+    if (opts.source) this.lastDamage = opts.source;
+    if (opts.from) {
+      const dx = this.pos.x - opts.from.x, dz = this.pos.z - opts.from.z;
+      const d = Math.hypot(dx, dz) || 1;
+      this.kb.set((dx / d) * 6, 0, (dz / d) * 6);
+      if (this.onGround) this.vel.y = Math.max(this.vel.y, 4);   // a little pop
+    }
+    audio.playHurt();
     if (this.onHurt) this.onHurt(this.hp, this.maxHp);
     if (this.hp <= 0) { this.dead = true; if (this.onDeath) this.onDeath(); }
   }
@@ -343,10 +425,9 @@ export class Player {
   _break() {
     // A swing hits a creature you're facing within reach before it breaks a block.
     if (this.mobs) {
-      const origin = new THREE.Vector3(this.pos.x, this.pos.y + EYE, this.pos.z);
-      const dir = lookDir(this.yaw, this.pitch, new THREE.Vector3());
+      const origin = this._rayOrigin.set(this.pos.x, this.pos.y + EYE, this.pos.z);
+      const dir = lookDir(this.yaw, this.pitch, this._rayDir);
       if (this.mobs.playerAttack(origin, dir)) {
-        audio.playBreak();
         if (this.onBreakPlace) this.onBreakPlace('break');
         return;
       }
@@ -391,12 +472,18 @@ export class Player {
   respawn(spawn) {
     this.pos.set(spawn.x, spawn.y, spawn.z);
     this.vel.set(0, 0, 0);
+    this.kb.set(0, 0, 0);
     this.yaw = 0;
     this.pitch = 0;
     this.frozen = true;
     this.hp = this.maxHp;
     this.dead = false;
     this.hurtCd = 0;
+    this.sinceHurt = 0;
+    this.regenAccum = 0;
+    this.shakeTime = 0;
+    this.lastDamage = null;
+    this._holdBreak = this._holdPlace = false;
   }
 
   // Current state for persistence.
@@ -404,6 +491,16 @@ export class Player {
     return {
       x: this.pos.x, y: this.pos.y, z: this.pos.z,
       yaw: this.yaw, pitch: this.pitch, selected: this.selected,
+      hotbar: [...HOTBAR],
     };
+  }
+
+  // Position-only state for the ~12Hz network stream; reuses one object so the
+  // render loop doesn't allocate every frame.
+  posState() {
+    const s = this._posState || (this._posState = {});
+    s.x = this.pos.x; s.y = this.pos.y; s.z = this.pos.z;
+    s.yaw = this.yaw; s.pitch = this.pitch;
+    return s;
   }
 }
