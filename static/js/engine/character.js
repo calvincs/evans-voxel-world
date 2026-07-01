@@ -1,4 +1,4 @@
-// A simple blocky character (Minecraft-ish): head, torso, two arms, two legs,
+// A simple blocky voxel character: head, torso, two arms, two legs,
 // each limb pivoted so it can swing for a walk animation. Used both for the
 // third-person view of yourself and for other players in multiplayer.
 

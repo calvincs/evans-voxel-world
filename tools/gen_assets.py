@@ -54,12 +54,12 @@ TILE_PROMPTS = {
 
 TILE_STYLE = (
     "16x16 pixel-art game texture, seamless and tileable, flat top-down, "
-    "Minecraft block texture style, crisp pixels, no text, no border, "
+    "blocky voxel game block texture style, crisp pixels, no text, no border, "
     "fills the whole square. Subject: {}"
 )
 
 BANNER_PROMPT = (
-    "A cheerful title banner for a kids' Minecraft-style voxel game. "
+    "A cheerful title banner for a kids' blocky voxel sandbox game. "
     "The words \"EVAN'S WORLD\" written in chunky 3D blocky cube letters made of "
     "grass and stone blocks. A couple of simple cube trees and a bright blue sky "
     "with a fluffy cloud. Colorful, friendly, cartoon voxel art, wide banner, "
