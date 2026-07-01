@@ -440,7 +440,15 @@ async function startGame(worldId, demo) {
     const d = Math.hypot(player.pos.x - (x + 0.5), player.pos.y - (y + 0.5), player.pos.z - (z + 0.5));
     if (d < 16) player.shake(0.9 * (1 - d / 16));
   };
-  world.onExplosion = (x, y, z) => feltShake(x, y, z);
+  // Caught in a blast: lose health, scaled by how close you were (up to 8 at
+  // point-blank, nothing past ~6 blocks). The long fuse gives you time to flee.
+  const BLAST_HURT_R = 6;
+  const blastHurt = (x, y, z) => {
+    const d = Math.hypot(player.pos.x - (x + 0.5), (player.pos.y + 0.9) - (y + 0.5), player.pos.z - (z + 0.5));
+    if (d < BLAST_HURT_R) player.hurt(Math.ceil((1 - d / BLAST_HURT_R) * 8));
+  };
+  const blastFelt = (x, y, z) => { feltShake(x, y, z); blastHurt(x, y, z); };
+  world.onExplosion = (x, y, z) => blastFelt(x, y, z);
 
   if (isTouch) setupTouchControls(player);
   buildHotbar(atlas.image, player);
@@ -503,7 +511,7 @@ async function startGame(worldId, demo) {
       if (m.kind === 'explode') {
         audio.playExplosion({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
         world._spawnParticles(m.x, m.y, m.z);
-        feltShake(m.x, m.y, m.z);
+        blastFelt(m.x, m.y, m.z);
       } else if (m.kind === 'ignite') {
         audio.playIgnite({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
       }

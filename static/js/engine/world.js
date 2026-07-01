@@ -10,7 +10,7 @@ import * as audio from '../audio.js';
 const key = (cx, cz) => `${cx},${cz}`;
 const floorDiv = (a, b) => Math.floor(a / b);
 
-const FUSE = 1.0;          // seconds a TNT ticks before it blows
+const FUSE = 4.0;          // seconds a TNT ticks before it blows (time to run!)
 const BLAST_RADIUS = 3.4;  // block radius destroyed
 
 // Glowstone lighting.
