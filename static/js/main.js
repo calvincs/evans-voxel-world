@@ -729,6 +729,8 @@ async function startGame(worldId, demo) {
 
   const clock = new THREE.Clock();
   let lastSel = -1;
+  const coordsEl = $('coords');
+  let lastCoords = '';
   function loop() {
     requestAnimationFrame(loop);
     if (offline) { renderer.render(scene, camera); return; }   // frozen while disconnected
@@ -748,8 +750,11 @@ async function startGame(worldId, demo) {
     updateRosterSpeaking();
 
     if (player.selected !== lastSel) { highlightSlot(player.selected); lastSel = player.selected; }
-    $('coords').textContent =
+    // Only touch the DOM when the shown text actually changes (most frames it
+    // doesn't — coords are whole numbers and the clock ticks once a minute).
+    const cstr =
       `x ${player.pos.x.toFixed(0)}  y ${player.pos.y.toFixed(0)}  z ${player.pos.z.toFixed(0)}  ·  ${sky.clock()}`;
+    if (cstr !== lastCoords) { coordsEl.textContent = cstr; lastCoords = cstr; }
 
     renderer.render(scene, camera);
   }
