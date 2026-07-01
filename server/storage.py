@@ -21,6 +21,7 @@ seed, so a world is fully reproducible from this tiny file. Worlds from the old
 single-world format (data/world.json) are migrated on first run.
 """
 
+import atexit
 import json
 import os
 import random
@@ -36,6 +37,7 @@ def _now() -> int:
 
 
 DEFAULT_SNAPSHOT_INTERVAL = 20 * 60   # seconds between automatic snapshots
+FLUSH_INTERVAL = 1.0                  # seconds; max window of edits at risk on a hard crash
 
 
 class WorldStore:
@@ -54,7 +56,18 @@ class WorldStore:
         # lazily, kept in sync on writes; never serialized. Lets edits_in_chunk
         # touch only the edits in one chunk instead of scanning the whole world.
         self._index: dict[str, dict[tuple, dict]] = {}
+        # Write-behind: frequent edits mark a world dirty and a background thread
+        # flushes it to disk at most once per FLUSH_INTERVAL, instead of
+        # rewriting the whole file on every block change. The cache stays
+        # authoritative, so gameplay always reads the latest state; only a hard
+        # crash risks the last ~1 s of edits (snapshots + session-end cover the
+        # rest).
+        self._dirty: set[str] = set()
         self._migrate_legacy(legacy_path)
+        self._stop = threading.Event()
+        self._flusher = threading.Thread(target=self._flush_loop, daemon=True)
+        self._flusher.start()
+        atexit.register(self.flush)
 
     # --- paths / ids ----------------------------------------------------------
     def _path(self, wid: str) -> str:
@@ -71,12 +84,43 @@ class WorldStore:
         return any(fn.endswith(".json") for fn in os.listdir(self.dir))
 
     # --- load / save ----------------------------------------------------------
-    def _write(self, world: dict):
-        self.cache[world["id"]] = world
+    def _write_file(self, world: dict):
+        """Serialize one world to disk (atomic on POSIX)."""
         tmp = self._path(world["id"]) + ".tmp"
         with open(tmp, "w") as f:
             json.dump(world, f)
-        os.replace(tmp, self._path(world["id"]))   # atomic on POSIX
+        os.replace(tmp, self._path(world["id"]))
+
+    def _write(self, world: dict):
+        """Cache + immediate disk write, for lifecycle changes that want to be
+        durable at once (create/rename/delete/revert/ownership). Also clears any
+        pending write-behind flag. Callers hold _LOCK."""
+        self.cache[world["id"]] = world
+        self._dirty.discard(world["id"])
+        self._write_file(world)
+
+    def _mark_dirty(self, world: dict):
+        """Update the world in memory and queue it for a background flush, rather
+        than rewriting the file on every edit. Callers hold _LOCK."""
+        self.cache[world["id"]] = world
+        self._dirty.add(world["id"])
+
+    def flush(self, wid: str | None = None):
+        """Write queued worlds to disk now — one world, or all of them. Runs on
+        the background timer, at session end, and at process exit (atexit)."""
+        with _LOCK:
+            targets = [wid] if wid is not None else list(self._dirty)
+            for i in targets:
+                if i in self._dirty:
+                    w = self.cache.get(i)
+                    if w is not None:
+                        self._write_file(w)
+                    self._dirty.discard(i)
+
+    def _flush_loop(self):
+        while not self._stop.wait(FLUSH_INTERVAL):
+            if self._dirty:
+                self.flush()
 
     def _load(self, wid: str) -> dict | None:
         if wid in self.cache:
@@ -189,6 +233,7 @@ class WorldStore:
         with _LOCK:
             self.cache.pop(wid, None)
             self._index.pop(wid, None)
+            self._dirty.discard(wid)         # nothing left to flush
             path = self._path(wid)
             existed = os.path.exists(path)
             if existed:
@@ -257,7 +302,7 @@ class WorldStore:
         if w:
             with _LOCK:
                 w["lastPlayed"] = _now()
-                self._write(w)
+                self._mark_dirty(w)
 
     # --- edit index (per-chunk) ----------------------------------------------
     def _chunk_of(self, x: int, z: int) -> tuple:
@@ -299,7 +344,7 @@ class WorldStore:
             w["edits"][self.key(x, y, z)] = block
             w["lastPlayed"] = _now()
             self._index_put(wid, x, y, z, block)
-            self._write(w)
+            self._mark_dirty(w)
         self.maybe_snapshot(wid)
 
     def set_blocks(self, wid: str, items):
@@ -311,7 +356,7 @@ class WorldStore:
                 w["edits"][self.key(x, y, z)] = block
                 self._index_put(wid, x, y, z, block)
             w["lastPlayed"] = _now()
-            self._write(w)
+            self._mark_dirty(w)
         self.maybe_snapshot(wid)
 
     def set_player(self, wid: str, state: dict):
@@ -321,7 +366,7 @@ class WorldStore:
         with _LOCK:
             w["player"] = state
             w["lastPlayed"] = _now()
-            self._write(w)
+            self._mark_dirty(w)
 
     def edits_in_chunk(self, wid, cx, cz, chunk_x, chunk_z, world_y):
         with _LOCK:

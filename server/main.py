@@ -488,8 +488,10 @@ async def world_ws(ws: WebSocket, wid: str):
         await _broadcast(room, None, {"type": "leave", "id": pid})
         if not room:
             _rooms.pop(wid, None)
-            # Last player left — capture the session's final state (unless we got
-            # here because of a revert, which already just snapshotted).
+            # Last player left — flush any write-behind edits to disk, then
+            # capture the session's final state (unless we got here because of a
+            # revert, which already just snapshotted).
+            store.flush(wid)
             if wid not in _reverting:
                 store.snapshot_now(wid, label="session end")
 
