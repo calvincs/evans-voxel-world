@@ -446,6 +446,7 @@ html, body {
    appear once a world is actually being played (body.in-game, set in main.js). */
 body:not(.in-game) #hud,
 body:not(.in-game) #crosshair,
+body:not(.in-game) #health,
 body:not(.in-game) #hotbar,
 body:not(.in-game) #music,
 body:not(.in-game) #voice,
@@ -631,5 +632,41 @@ body:not(.in-game) #talk { display: none !important; }
 /* On touch screens lift the hotbar above the on-screen buttons. */
 @media (pointer: coarse) {
   #hotbar { bottom: 116px; }
+  #health { bottom: 166px; }
   .slot { width: 42px; height: 42px; }
 }
+
+/* --- Health / combat ------------------------------------------------------ */
+#health {
+  position: fixed;
+  left: 50%; bottom: 66px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 3px;
+  z-index: 5;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
+}
+#health .heart { font-size: 22px; line-height: 1; color: #ff4d4d; }
+#health .heart.off { color: #4a2020; }
+
+/* Full-screen red vignette that flashes when the player takes a hit. */
+#hurt {
+  position: fixed; inset: 0; z-index: 6;
+  pointer-events: none; opacity: 0;
+  background: radial-gradient(ellipse at center,
+              rgba(180, 0, 0, 0) 45%, rgba(180, 0, 0, 0.55) 100%);
+  transition: opacity 0.16s ease-out;
+}
+#hurt.show { opacity: 1; transition: opacity 0.05s ease-in; }
+
+/* Death screen (mirrors the disconnected overlay). */
+#dead {
+  position: fixed; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(20, 20, 30, 0.82); backdrop-filter: blur(4px);
+}
+#dead.hidden { display: none; }
+#dead .panel { border-color: #c2492f; max-width: 420px; }
+#dead h1 { color: #c2492f; }
+#dead p { color: #444; line-height: 1.5; margin-bottom: 14px; }

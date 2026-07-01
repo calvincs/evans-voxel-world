@@ -41,6 +41,15 @@ export class Player {
     this.onBreakPlace = null;     // optional callback(kind)
     this.onEngage = null;         // optional callback when controls engage
 
+    // Health / combat.
+    this.maxHp = 10;
+    this.hp = 10;
+    this.hurtCd = 0;              // brief invulnerability after a hit
+    this.dead = false;
+    this.mobs = null;            // set by main.js; lets a swing hit creatures
+    this.onHurt = null;          // callback(hp, maxHp)
+    this.onDeath = null;         // callback() when hp hits 0
+
     this.mobile = false;          // set true to use touch controls
     this.touchMove = { x: 0, y: 0 };  // joystick: x=strafe, y=forward (-1..1)
     this.wantJump = false;        // virtual jump button held
@@ -163,6 +172,7 @@ export class Player {
       else { this._syncCamera(); return; }
     }
     dt = Math.min(dt, 0.05); // clamp big hitches so we never tunnel
+    if (this.hurtCd > 0) this.hurtCd -= dt;
 
     const f = this._forward();
     const right = new THREE.Vector3().crossVectors(f, UP).normalize();
@@ -300,7 +310,27 @@ export class Player {
     }
   }
 
+  // Take damage, with a short invulnerability window so several mobs can't
+  // instantly gang-nuke you.
+  hurt(dmg) {
+    if (this.dead || this.hurtCd > 0) return;
+    this.hp = Math.max(0, this.hp - dmg);
+    this.hurtCd = 0.5;
+    if (this.onHurt) this.onHurt(this.hp, this.maxHp);
+    if (this.hp <= 0) { this.dead = true; if (this.onDeath) this.onDeath(); }
+  }
+
   _break() {
+    // A swing hits a creature you're facing within reach before it breaks a block.
+    if (this.mobs) {
+      const origin = new THREE.Vector3(this.pos.x, this.pos.y + EYE, this.pos.z);
+      const dir = lookDir(this.yaw, this.pitch, new THREE.Vector3());
+      if (this.mobs.playerAttack(origin, dir)) {
+        audio.playBreak();
+        if (this.onBreakPlace) this.onBreakPlace('break');
+        return;
+      }
+    }
     const r = this.raycast();
     if (!r) return;
     const broken = this.world.getBlock(r.hit.x, r.hit.y, r.hit.z);
@@ -344,6 +374,9 @@ export class Player {
     this.yaw = 0;
     this.pitch = 0;
     this.frozen = true;
+    this.hp = this.maxHp;
+    this.dead = false;
+    this.hurtCd = 0;
   }
 
   // Current state for persistence.

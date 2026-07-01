@@ -13,6 +13,7 @@
   <canvas id="game"></canvas>
 
   <div id="crosshair"></div>
+  <div id="hurt"></div>
   <div id="toast"></div>
 
   <div id="hud">
@@ -35,6 +36,7 @@
     </div>
   </div>
 
+  <div id="health"></div>
   <div id="hotbar"></div>
 
   <!-- Sign in / create account (shown before the world menu) -->
@@ -124,7 +126,7 @@
         <li><b>W A S D</b> — move</li>
         <li><b>Mouse</b> — look around</li>
         <li><b>Space</b> — jump &nbsp;·&nbsp; <b>Shift</b> — run</li>
-        <li><b>Left click</b> — break block</li>
+        <li><b>Left click</b> — break block / hit creatures</li>
         <li><b>Right click</b> — place block</li>
         <li><b>1–8</b> or <b>scroll</b> — pick a block</li>
         <li><b>E</b> — inventory (pick any block)</li>
@@ -138,6 +140,14 @@
         <button id="snapshots" class="ghost-btn hidden">⏱ Snapshots</button>
         <button id="worlds">← Worlds</button>
       </div>
+    </div>
+  </div>
+
+  <div id="dead" class="hidden">
+    <div class="panel">
+      <h1>💀 You died</h1>
+      <p>A creature got you.<br><b>Your world is safe.</b></p>
+      <button id="dead-rejoin" class="primary-btn">↩ Rejoin</button>
     </div>
   </div>
 

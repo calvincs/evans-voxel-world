@@ -12,13 +12,13 @@ import { isSolid, GRASS, WATER } from './blocks.js';
 // marks water-only creatures. When /static/textures/mob_<type>.png exists it is
 // used as the skin and overrides the flat colours (see loadMobSkins).
 const TYPES = {
-  pig:     { shape: 'quad',    body: 0xe89bb0, head: 0xe07a96, w: 0.62, bh: 0.5,  l: 0.9,  legH: 0.32, legW: 0.16, hd: 0.4,  speed: 1.5 },
-  sheep:   { shape: 'quad',    body: 0xeae7dc, head: 0xd6c6ad, w: 0.62, bh: 0.6,  l: 0.8,  legH: 0.34, legW: 0.15, hd: 0.34, speed: 1.2 },
-  cow:     { shape: 'quad',    body: 0x6e4b34, head: 0x4a3322, w: 0.72, bh: 0.62, l: 1.0,  legH: 0.42, legW: 0.18, hd: 0.42, speed: 1.1 },
-  wolf:    { shape: 'quad',    body: 0x9b9b9b, head: 0x8b8b8b, w: 0.48, bh: 0.48, l: 0.92, legH: 0.44, legW: 0.14, hd: 0.34, speed: 2.5, tail: true },
-  chicken: { shape: 'chicken', body: 0xffffff, head: 0xf2f2f2, w: 0.34, bh: 0.32, l: 0.4,  legH: 0.24, legW: 0.07, hd: 0.24, speed: 1.5, foot: 0xe6a020, comb: 0xd23b3b },
-  spider:  { shape: 'spider',  body: 0x2a2320, head: 0x1c1614, w: 0.7,  bh: 0.34, l: 0.7,  legH: 0.3,  legW: 0.07, hd: 0.4,  speed: 2.2, eye: 0xb03030, night: true },
-  squid:   { shape: 'squid',   aquatic: true, body: 0x7a2a5a, head: 0x7a2a5a, w: 0.5, bh: 0.66, l: 0.5, legW: 0.09, speed: 1.1 },
+  pig:     { shape: 'quad',    body: 0xe89bb0, head: 0xe07a96, w: 0.62, bh: 0.5,  l: 0.9,  legH: 0.32, legW: 0.16, hd: 0.4,  speed: 1.5, hp: 8 },
+  sheep:   { shape: 'quad',    body: 0xeae7dc, head: 0xd6c6ad, w: 0.62, bh: 0.6,  l: 0.8,  legH: 0.34, legW: 0.15, hd: 0.34, speed: 1.2, hp: 8 },
+  cow:     { shape: 'quad',    body: 0x6e4b34, head: 0x4a3322, w: 0.72, bh: 0.62, l: 1.0,  legH: 0.42, legW: 0.18, hd: 0.42, speed: 1.1, hp: 10 },
+  wolf:    { shape: 'quad',    body: 0x9b9b9b, head: 0x8b8b8b, w: 0.48, bh: 0.48, l: 0.92, legH: 0.44, legW: 0.14, hd: 0.34, speed: 2.5, tail: true, hp: 12, hostile: true, attack: 2 },
+  chicken: { shape: 'chicken', body: 0xffffff, head: 0xf2f2f2, w: 0.34, bh: 0.32, l: 0.4,  legH: 0.24, legW: 0.07, hd: 0.24, speed: 1.5, foot: 0xe6a020, comb: 0xd23b3b, hp: 4 },
+  spider:  { shape: 'spider',  body: 0x2a2320, head: 0x1c1614, w: 0.7,  bh: 0.34, l: 0.7,  legH: 0.3,  legW: 0.07, hd: 0.4,  speed: 2.2, eye: 0xb03030, night: true, hp: 8, hostile: true, attack: 1 },
+  squid:   { shape: 'squid',   aquatic: true, body: 0x7a2a5a, head: 0x7a2a5a, w: 0.5, bh: 0.66, l: 0.5, legW: 0.09, speed: 1.1, hp: 8, hostile: true, attack: 1 },
 };
 const TYPE_KEYS = Object.keys(TYPES);
 const LAND_KEYS = TYPE_KEYS.filter((k) => !TYPES[k].aquatic);
@@ -26,6 +26,13 @@ const WATER_KEYS = TYPE_KEYS.filter((k) => TYPES[k].aquatic);
 
 const GRAVITY = 24, TURN = 2.2;
 const MAX_MOBS = 10, SPAWN_MIN = 12, SPAWN_MAX = 26, DESPAWN = 42;
+
+// Combat tuning.
+const DETECT = 11;          // hostile aggro range (blocks)
+const ATTACK_RANGE = 1.7;   // how close a hostile must be to land a hit
+const ATTACK_INTERVAL = 1.0;// seconds between a mob's hits
+const PLAYER_REACH = 3.4;   // how far the player's swing reaches a creature
+const PLAYER_DMG = 4;       // damage per swing
 
 // Optional AI-generated skins live at /static/textures/mob_<type>.png. When one
 // exists it's loaded once and shared by every mob of that type; otherwise the
@@ -205,6 +212,11 @@ class Mob {
     this.phase = 0;
     this.bob = Math.random() * 10;
 
+    this.hp = t.hp || 6;
+    this.hostile = !!t.hostile;
+    this.attackCd = 0;
+    this.hurtFlash = 0;
+
     this.group = new THREE.Group();
     const skin = SKIN[type];
     const bodyCol = new THREE.Color(t.body);
@@ -221,10 +233,33 @@ class Mob {
       eye: new THREE.MeshBasicMaterial({ color: 0x1a1a1a }),
     };
     this.legs = BUILDERS[t.shape](t, mats, this.group);
+    // Lambert materials whose emissive we pulse red on a hit.
+    this.flashMats = [mats.body, mats.head, mats.leg];
 
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw;
     scene.add(this.group);
+  }
+
+  // Body-centre point in world space (for hit tests and knock feedback).
+  center(out) {
+    const yc = this.aquatic ? this.t.bh * 0.5 : (this.t.legH + this.t.bh) * 0.5;
+    return (out || new THREE.Vector3()).set(this.pos.x, this.pos.y + yc, this.pos.z);
+  }
+
+  hurt(dmg) {
+    this.hp -= dmg;
+    this.hurtFlash = 0.14;
+    for (const m of this.flashMats) if (m.emissive) m.emissive.setHex(0x661111);
+  }
+
+  // Deal damage to the player if in range and off cooldown.
+  _tryAttack(player, dist) {
+    if (dist <= ATTACK_RANGE && this.attackCd <= 0 &&
+        player && player.locked && !player.frozen && !player.dead) {
+      player.hurt(this.t.attack || 1);
+      this.attackCd = ATTACK_INTERVAL;
+    }
   }
 
   _chooseAction() {
@@ -272,18 +307,36 @@ class Mob {
     return world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) === WATER;
   }
 
-  update(dt, world) {
-    if (this.aquatic) this._swim(dt, world);
-    else this._walk(dt, world);
+  update(dt, world, player) {
+    if (this.aquatic) this._swim(dt, world, player);
+    else this._walk(dt, world, player);
     this._animate(dt);
+    if (this.attackCd > 0) this.attackCd -= dt;
+    if (this.hurtFlash > 0) {
+      this.hurtFlash -= dt;
+      if (this.hurtFlash <= 0) for (const m of this.flashMats) if (m.emissive) m.emissive.setHex(0x000000);
+    }
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw;
   }
 
   // Land movement: wander, gravity + voxel collision, don't walk off cliffs.
-  _walk(dt, world) {
+  // Hostiles instead home in on a nearby player and bite.
+  _walk(dt, world, player) {
     this.timer -= dt;
     if (this.timer <= 0) this._chooseAction();
+
+    let chasing = false;
+    if (this.hostile && player) {
+      const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < DETECT) {
+        chasing = true;
+        this.walking = true;
+        this.targetYaw = Math.atan2(-dx, -dz);   // face the player
+        this._tryAttack(player, dist);
+      }
+    }
 
     let dy = this.targetYaw - this.yaw;
     while (dy > Math.PI) dy -= 2 * Math.PI;
@@ -291,13 +344,15 @@ class Mob {
     this.yaw += Math.max(-TURN * dt, Math.min(TURN * dt, dy));
 
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
-    let speed = this.walking ? this.t.speed : 0;
+    let speed = this.walking ? this.t.speed * (chasing ? 1.15 : 1) : 0;
 
     if (this.walking) {
       const ax = Math.floor(this.pos.x + fx * 0.7), az = Math.floor(this.pos.z + fz * 0.7);
       const groundAhead = isSolid(world.getBlock(ax, Math.floor(this.pos.y - 0.4), az)) ||
                           isSolid(world.getBlock(ax, Math.floor(this.pos.y - 1.2), az));
-      if (!groundAhead) { this.walking = false; speed = 0; this.timer = 0.4; this.targetYaw = this.yaw + 2.2; }
+      // Don't walk off cliffs — but a chasing hostile just stops at the edge
+      // instead of turning away, so it stays locked on.
+      if (!groundAhead) { speed = 0; if (!chasing) { this.walking = false; this.timer = 0.4; this.targetYaw = this.yaw + 2.2; } }
     }
 
     this.vel.x = fx * speed;
@@ -305,8 +360,8 @@ class Mob {
     this.vel.y -= GRAVITY * dt;
     if (this.vel.y < -40) this.vel.y = -40;
 
-    if (this._stepMove(world, 'x', this.vel.x * dt)) { this.targetYaw = this.yaw + 1.5; this.vel.x = 0; }
-    if (this._stepMove(world, 'z', this.vel.z * dt)) { this.targetYaw = this.yaw + 1.5; this.vel.z = 0; }
+    if (this._stepMove(world, 'x', this.vel.x * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.x = 0; }
+    if (this._stepMove(world, 'z', this.vel.z * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.z = 0; }
     const hitY = this._moveAxis(world, 'y', this.vel.y * dt);
     if (hitY) { this.onGround = this.vel.y < 0; this.vel.y = 0; } else this.onGround = false;
 
@@ -316,9 +371,16 @@ class Mob {
 
   // Water movement: drift on a heading, turn back at the water's edge, and bob
   // up and down while staying fully submerged.
-  _swim(dt, world) {
+  _swim(dt, world, player) {
     this.timer -= dt;
     if (this.timer <= 0) { this.targetYaw = this.yaw + (Math.random() - 0.5) * 3.0; this.timer = 1.5 + Math.random() * 2.5; }
+
+    // Home toward a nearby player (still confined to water) and bite if close.
+    if (this.hostile && player) {
+      const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
+      if (Math.hypot(dx, dz) < DETECT) this.targetYaw = Math.atan2(-dx, -dz);
+      this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
+    }
 
     let dy = this.targetYaw - this.yaw;
     while (dy > Math.PI) dy -= 2 * Math.PI;
@@ -392,9 +454,32 @@ export class Mobs {
     }
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
-      m.update(dt, this.world);
+      m.update(dt, this.world, player);
+      if (m.hp <= 0) {   // killed — puff of its body colour, then remove
+        this.world.spawnBreakBurst(m.pos.x, m.pos.y + 0.4, m.pos.z, m.t.body);
+        m.dispose(); this.mobs.splice(i, 1); continue;
+      }
       if (m.pos.distanceTo(playerPos) > DESPAWN || m.pos.y < -6) { m.dispose(); this.mobs.splice(i, 1); }
     }
+  }
+
+  // The player swung: damage the nearest creature within reach and roughly in
+  // front of the camera. Returns true if one was hit (so the block break is
+  // skipped in favour of the attack).
+  playerAttack(origin, dir) {
+    let best = null, bestDist = Infinity;
+    const c = new THREE.Vector3();
+    for (const m of this.mobs) {
+      m.center(c);
+      const dist = c.distanceTo(origin);
+      if (dist > PLAYER_REACH || dist < 1e-3) continue;
+      c.sub(origin).multiplyScalar(1 / dist);   // unit vector toward the mob
+      if (c.dot(dir) < 0.72) continue;           // within ~44° of the look direction
+      if (dist < bestDist) { bestDist = dist; best = m; }
+    }
+    if (!best) return false;
+    best.hurt(PLAYER_DMG);
+    return true;
   }
 
   _trySpawn(playerPos, daylight) {

@@ -447,6 +447,32 @@ async function startGame(worldId, demo) {
   world.update(spawn.x, spawn.z);   // preload spawn chunks
 
   const mobs = new Mobs(scene, world, assets.textures);   // wandering animals (+ optional skins)
+  player.mobs = mobs;                                     // let a swing hit creatures
+
+  // Health HUD + damage feedback + death.
+  let dead = false;
+  const healthEl = $('health'), hurtEl = $('hurt');
+  const renderHealth = (hp = player.hp, max = player.maxHp) => {
+    let s = '';
+    for (let i = 0; i < max; i++) s += `<span class="heart${i < hp ? '' : ' off'}">❤</span>`;
+    healthEl.innerHTML = s;
+  };
+  renderHealth();
+  let hurtTimer = null;
+  player.onHurt = (hp, max) => {
+    renderHealth(hp, max);
+    hurtEl.classList.add('show');
+    clearTimeout(hurtTimer);
+    hurtTimer = setTimeout(() => hurtEl.classList.remove('show'), 160);
+    player.shake(0.5);
+  };
+  player.onDeath = () => {
+    dead = true;
+    if (document.pointerLockElement) document.exitPointerLock();
+    renderHealth(0, player.maxHp);
+    $('dead').classList.remove('hidden');
+  };
+  $('dead-rejoin').onclick = () => location.reload();   // rejoin the world fresh
 
   // Multiplayer: stream our position and apply others' edits + movements.
   const remotes = new RemotePlayers(scene);
@@ -733,7 +759,7 @@ async function startGame(worldId, demo) {
   let lastCoords = '';
   function loop() {
     requestAnimationFrame(loop);
-    if (offline) { renderer.render(scene, camera); return; }   // frozen while disconnected
+    if (offline || dead) { renderer.render(scene, camera); return; }   // frozen while disconnected / dead
     const dt = clock.getDelta();
     player.update(dt);
     audio.setListener(player.pos.x, player.pos.y + 1.62, player.pos.z, player.yaw);
