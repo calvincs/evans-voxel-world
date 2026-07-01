@@ -18,6 +18,10 @@ const REACH = 6;
 const THIRD_DIST = 4.0;  // third-person camera distance
 const UP = new THREE.Vector3(0, 1, 0);
 
+// Health slowly returns once you've been out of danger for a while.
+const REGEN_DELAY = 60;      // seconds without taking damage before healing starts
+const REGEN_INTERVAL = 180;  // seconds per +1 heart thereafter
+
 // Forward vector from yaw/pitch (matches the camera's YXZ orientation).
 function lookDir(yaw, pitch, out) {
   const cp = Math.cos(pitch);
@@ -46,8 +50,11 @@ export class Player {
     this.hp = 10;
     this.hurtCd = 0;              // brief invulnerability after a hit
     this.dead = false;
+    this.sinceHurt = 0;          // seconds since last damage (gates regen)
+    this.regenAccum = 0;         // progress toward the next regenerated heart
     this.mobs = null;            // set by main.js; lets a swing hit creatures
     this.onHurt = null;          // callback(hp, maxHp)
+    this.onHeal = null;          // callback(hp, maxHp) on regen tick
     this.onDeath = null;         // callback() when hp hits 0
 
     this.mobile = false;          // set true to use touch controls
@@ -173,6 +180,17 @@ export class Player {
     }
     dt = Math.min(dt, 0.05); // clamp big hitches so we never tunnel
     if (this.hurtCd > 0) this.hurtCd -= dt;
+
+    // Regenerate health after staying out of danger long enough.
+    this.sinceHurt += dt;
+    if (!this.dead && this.hp < this.maxHp && this.sinceHurt >= REGEN_DELAY) {
+      this.regenAccum += dt;
+      if (this.regenAccum >= REGEN_INTERVAL) {
+        this.regenAccum -= REGEN_INTERVAL;
+        this.hp = Math.min(this.maxHp, this.hp + 1);
+        if (this.onHeal) this.onHeal(this.hp, this.maxHp);
+      }
+    }
 
     const f = this._forward();
     const right = new THREE.Vector3().crossVectors(f, UP).normalize();
@@ -316,6 +334,8 @@ export class Player {
     if (this.dead || this.hurtCd > 0) return;
     this.hp = Math.max(0, this.hp - dmg);
     this.hurtCd = 0.5;
+    this.sinceHurt = 0;          // taking damage restarts the regen clock
+    this.regenAccum = 0;
     if (this.onHurt) this.onHurt(this.hp, this.maxHp);
     if (this.hp <= 0) { this.dead = true; if (this.onDeath) this.onDeath(); }
   }

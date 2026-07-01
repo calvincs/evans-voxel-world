@@ -466,6 +466,7 @@ async function startGame(worldId, demo) {
     hurtTimer = setTimeout(() => hurtEl.classList.remove('show'), 160);
     player.shake(0.5);
   };
+  player.onHeal = (hp, max) => renderHealth(hp, max);   // slow out-of-combat regen
   player.onDeath = () => {
     dead = true;
     if (document.pointerLockElement) document.exitPointerLock();
