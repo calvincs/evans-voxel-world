@@ -15,6 +15,7 @@ import os
 import itertools
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -61,6 +62,12 @@ def gen_for(seed: int) -> worldgen.WorldGenerator:
 
 
 app = FastAPI(title="EvansGame")
+
+# Compress responses for clients that accept it. Voxel chunk data and the
+# vendored Three.js bundle are large and highly compressible; the 512-byte floor
+# skips tiny JSON where framing overhead would dominate. (Already-compressed
+# audio barely shrinks, but it's fetched once and the cost is negligible.)
+app.add_middleware(GZipMiddleware, minimum_size=512)
 
 
 # --- Auth helpers ------------------------------------------------------------
