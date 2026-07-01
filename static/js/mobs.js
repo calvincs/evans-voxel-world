@@ -25,7 +25,8 @@ const LAND_KEYS = TYPE_KEYS.filter((k) => !TYPES[k].aquatic);
 const WATER_KEYS = TYPE_KEYS.filter((k) => TYPES[k].aquatic);
 
 const GRAVITY = 24, TURN = 2.2;
-const MAX_MOBS = 10, SPAWN_MIN = 12, SPAWN_MAX = 26, DESPAWN = 42;
+const TARGET_MOBS = 8;      // population kept alive around the player
+const SPAWN_MIN = 12, SPAWN_MAX = 26, DESPAWN = 42;
 
 // Combat tuning.
 const DETECT = 11;          // hostile aggro range (blocks)
@@ -447,17 +448,22 @@ export class Mobs {
 
   update(dt, player, daylight = 1) {
     const playerPos = player.pos;
+    // Keep the world populated: top up toward the target count, refilling faster
+    // while we're short (e.g. just after something was killed or wandered off).
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
-      this.spawnTimer = 2.5 + Math.random() * 3;
-      if (this.mobs.length < MAX_MOBS) this._trySpawn(playerPos, daylight);
+      const short = this.mobs.length < TARGET_MOBS;
+      this.spawnTimer = short ? 0.8 + Math.random() * 1.2 : 2.5 + Math.random() * 3;
+      if (short) this._trySpawn(playerPos, daylight);
     }
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
       m.update(dt, this.world, player);
-      if (m.hp <= 0) {   // killed — puff of its body colour, then remove
+      if (m.hp <= 0) {   // killed — puff of its body colour, remove, and reseed
         this.world.spawnBreakBurst(m.pos.x, m.pos.y + 0.4, m.pos.z, m.t.body);
-        m.dispose(); this.mobs.splice(i, 1); continue;
+        m.dispose(); this.mobs.splice(i, 1);
+        this._reseed(m.type, playerPos, daylight);   // replacement appears elsewhere
+        continue;
       }
       if (m.pos.distanceTo(playerPos) > DESPAWN || m.pos.y < -6) { m.dispose(); this.mobs.splice(i, 1); }
     }
@@ -482,40 +488,58 @@ export class Mobs {
     return true;
   }
 
-  _trySpawn(playerPos, daylight) {
-    // A quarter of the time, try to seed a squid in nearby deep water instead.
-    if (WATER_KEYS.length && Math.random() < 0.25) { this._trySpawnWater(playerPos); return; }
-
+  // A random grass surface a comfortable distance from the player, or null.
+  _findLandSpot(playerPos) {
     const ang = Math.random() * Math.PI * 2;
     const dist = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
     const x = Math.floor(playerPos.x + Math.cos(ang) * dist);
     const z = Math.floor(playerPos.z + Math.sin(ang) * dist);
-    // Find the surface; only spawn land animals on grass.
-    let surfaceY = null;
     for (let y = DIM.WY - 1; y > 1; y--) {
       const b = this.world.getBlock(x, y, z);
-      if (isSolid(b)) { if (b === GRASS) surfaceY = y; break; }
+      if (isSolid(b)) return b === GRASS ? { x: x + 0.5, y: y + 1, z: z + 0.5 } : null;
     }
-    if (surfaceY === null) return;
-    // Nocturnal creatures (spiders) only appear once it's dark enough.
-    const night = daylight < 0.35;
-    const pool = LAND_KEYS.filter((k) => night || !TYPES[k].night);
-    if (!pool.length) return;
-    const type = pool[Math.floor(Math.random() * pool.length)];
-    this.mobs.push(new Mob(this.scene, type, x + 0.5, surfaceY + 1, z + 0.5));
+    return null;
   }
 
-  _trySpawnWater(playerPos) {
+  // A random spot in deep-enough water a distance from the player, or null.
+  _findWaterSpot(playerPos) {
     const ang = Math.random() * Math.PI * 2;
     const dist = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
     const x = Math.floor(playerPos.x + Math.cos(ang) * dist);
     const z = Math.floor(playerPos.z + Math.sin(ang) * dist);
     const wl = DIM.water;
-    // Need at least two blocks of water below the surface so there's room to swim.
-    if (this.world.getBlock(x, wl - 1, z) === WATER && this.world.getBlock(x, wl - 2, z) === WATER) {
-      const type = WATER_KEYS[Math.floor(Math.random() * WATER_KEYS.length)];
-      this.mobs.push(new Mob(this.scene, type, x + 0.5, wl - 1.2, z + 0.5));
+    // Two blocks of water below the surface gives room to swim.
+    if (this.world.getBlock(x, wl - 1, z) === WATER && this.world.getBlock(x, wl - 2, z) === WATER)
+      return { x: x + 0.5, y: wl - 1.2, z: z + 0.5 };
+    return null;
+  }
+
+  // Try to place one mob of `type` away from the player. Returns true if spawned.
+  _spawnType(type, playerPos, daylight) {
+    const t = TYPES[type];
+    if (t.night && daylight >= 0.35) return false;     // nocturnal, and it's daytime
+    const spot = t.aquatic ? this._findWaterSpot(playerPos) : this._findLandSpot(playerPos);
+    if (!spot) return false;
+    this.mobs.push(new Mob(this.scene, type, spot.x, spot.y, spot.z));
+    return true;
+  }
+
+  _trySpawn(playerPos, daylight) {
+    const night = daylight < 0.35;
+    // A quarter of the time try the water, otherwise a random eligible land type.
+    if (WATER_KEYS.length && Math.random() < 0.25) {
+      this._spawnType(WATER_KEYS[Math.floor(Math.random() * WATER_KEYS.length)], playerPos, daylight);
+      return;
     }
+    const pool = LAND_KEYS.filter((k) => night || !TYPES[k].night);
+    if (pool.length) this._spawnType(pool[Math.floor(Math.random() * pool.length)], playerPos, daylight);
+  }
+
+  // Replace a killed creature elsewhere on the map so the population holds — the
+  // same species when it can spawn right now, otherwise any eligible one.
+  _reseed(type, playerPos, daylight) {
+    if (this.mobs.length >= TARGET_MOBS) return;
+    if (!this._spawnType(type, playerPos, daylight)) this._trySpawn(playerPos, daylight);
   }
 
   // Spawn a specific animal at a spot (used for testing/screenshots).
