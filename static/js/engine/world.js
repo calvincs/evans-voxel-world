@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { DIM, RENDER_DISTANCE } from './constants.js';
 import { Chunk } from './chunk.js';
-import { AIR, STONE, TNT, GLOWSTONE } from '../blocks.js';
+import { AIR, STONE, WATER, TNT, GLOWSTONE } from '../blocks.js';
 import * as audio from '../audio.js';
 
 const key = (cx, cz) => `${cx},${cz}`;
@@ -149,6 +149,51 @@ export class World {
         }).catch(() => {/* offline is fine; world still works locally */});
       }
     }
+    // Opening a gap below sea level that touches water lets water fill it in.
+    if (persist && block === AIR && wy <= DIM.water) this._floodWater(wx, wy, wz);
+  }
+
+  // Still water fills a fresh gap that opens below sea level and touches water.
+  // Not a flow simulation — it doesn't animate or level out; it just makes any
+  // connected air region that "should" be underwater become water. Flood-fills
+  // within loaded chunks (bounded), then persists + relays the fill in one
+  // batch. Triggered by a local break; other clients just receive the batch.
+  _floodWater(sx, sy, sz) {
+    const WL = DIM.water;
+    const N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    if (sy > WL || this.getBlock(sx, sy, sz) !== AIR) return;
+    // Only floods if the opened cell actually touches water.
+    let touches = false;
+    for (const [dx, dy, dz] of N)
+      if (this.getBlock(sx + dx, sy + dy, sz + dz) === WATER) { touches = true; break; }
+    if (!touches) return;
+
+    const CAP = 4096;
+    const seen = new Set([`${sx},${sy},${sz}`]);
+    const queue = [[sx, sy, sz]];
+    const filled = [];
+    while (queue.length && filled.length < CAP) {
+      const [x, y, z] = queue.shift();
+      this.setBlock(x, y, z, WATER, false);         // local only; batch-sent below
+      filled.push({ x, y, z, block: WATER });
+      for (const [dx, dy, dz] of N) {
+        const nx = x + dx, ny = y + dy, nz = z + dz;
+        if (ny > WL) continue;                       // never rise above sea level
+        const k = `${nx},${ny},${nz}`;
+        if (seen.has(k)) continue;
+        // Stay inside loaded chunks so we never write into ungenerated terrain.
+        if (!this.chunks.has(key(floorDiv(nx, DIM.CX), floorDiv(nz, DIM.CZ)))) continue;
+        if (this.getBlock(nx, ny, nz) !== AIR) continue;
+        seen.add(k);
+        queue.push([nx, ny, nz]);                    // adjacent to the cell we just filled
+      }
+    }
+    if (!filled.length) return;
+    if (this.net && this.net.connected) this.net.sendEdits(filled);
+    else fetch(`${this.base}/edits`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ edits: filled }),
+    }).catch(() => {});
   }
 
   _markDirty(cx, cz) {
