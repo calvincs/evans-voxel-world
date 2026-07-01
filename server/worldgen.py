@@ -125,12 +125,21 @@ class WorldGenerator:
         base_x = cx * CHUNK_X
         base_z = cz * CHUNK_Z
 
+        # Surface height for every column we touch, including a 2-block margin so
+        # trees straddling the border resolve identically from either chunk. Each
+        # height is a 4-octave fbm, and the three passes below all need it, so we
+        # compute it once here instead of ~3x per column.
+        heights = {}
+        for wz in range(base_z - 2, base_z + CHUNK_Z + 2):
+            for wx in range(base_x - 2, base_x + CHUNK_X + 2):
+                heights[(wx, wz)] = self.height_at(wx, wz)
+
         # 1) Ground column + water fill.
         for lz in range(CHUNK_Z):
             for lx in range(CHUNK_X):
                 wx = base_x + lx
                 wz = base_z + lz
-                height = self.height_at(wx, wz)
+                height = heights[(wx, wz)]
 
                 for y in range(height + 1):
                     if y == height:
@@ -157,7 +166,7 @@ class WorldGenerator:
             for wx in range(base_x - 2, base_x + CHUNK_X + 2):
                 if not self._tree_at(wx, wz):
                     continue
-                height = self.height_at(wx, wz)
+                height = heights[(wx, wz)]
                 if height <= WATER_LEVEL:        # no trees in water
                     continue
                 self._stamp_tree(blocks, base_x, base_z, wx, wz, height)
@@ -166,7 +175,7 @@ class WorldGenerator:
         for lz in range(CHUNK_Z):
             for lx in range(CHUNK_X):
                 wx, wz = base_x + lx, base_z + lz
-                height = self.height_at(wx, wz)
+                height = heights[(wx, wz)]
                 if not (WATER_LEVEL < height < SNOW_LINE):
                     continue
                 if not self._pumpkin_at(wx, wz):
