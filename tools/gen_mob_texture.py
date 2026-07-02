@@ -54,6 +54,16 @@ PROMPTS = {
     "wolf":    "thick coarse grey wolf fur, short hair, subtle darker grey streaks",
     "spider":  "black spider exoskeleton, dark chitin with faint dull-red markings, slightly bristly",
     "squid":   "deep reddish-purple squid skin, smooth wet mottled cephalopod hide",
+    # Villagers: the skin is tiled onto body + limbs as CLOTHING (their heads
+    # keep a flat face colour in mobs.js), so prompt for fabric, not skin.
+    "farmer":  "rough earthy brown linen farmer tunic fabric, coarse homespun weave, "
+               "a couple of lighter stitched-on patches",
+    "smith":   "dark charcoal-grey leather blacksmith apron, worn and scuffed, "
+               "faint soot marks, stitched seams and a few dull metal rivets",
+    "elder":   "soft cream woven wool robe fabric, fine gentle weave, "
+               "subtle pale grey age lines, dignified and plain",
+    "kid":     "bright cornflower-blue woven cotton cloth, "
+               "simple chunky knit-style rows, playful",
 }
 
 
@@ -86,7 +96,7 @@ def generate(prompt: str, model: str, key: str) -> bytes:
     msg = data["choices"][0]["message"]
     imgs = msg.get("images") or []
     if not imgs:
-        sys.exit(f"No image in response (content: {msg.get('content','')[:300]!r})")
+        sys.exit(f"No image in response (content: {(msg.get('content') or '')[:300]!r})")
     url = imgs[0]["image_url"]["url"]
     return base64.b64decode(url.split(",", 1)[1] if url.startswith("data:") else url)
 

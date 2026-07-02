@@ -1,12 +1,14 @@
 // Ambient wildlife: land animals (pigs, sheep, cows, wolves, chickens, spiders)
-// that wander on grass, plus squid that swim in lakes and oceans. They spawn
-// near the player, amble/swim with a little AI, and despawn when far away.
-// Hostiles hunt: they chase, hop down holes, and pathfind around corners.
+// that wander on grass, plus squid that swim in lakes and oceans, plus the
+// villagers (farmer, smith, elder, kid) who live around the generated village
+// and keep to it. Creatures spawn near the player, amble/swim with a little
+// AI, and despawn when far away. Hostiles hunt: they chase, hop down holes,
+// and pathfind around corners.
 // Client-side and ambient — they don't drop items or sync across multiplayer.
 
 import * as THREE from 'three';
 import { DIM } from './engine/constants.js';
-import { isSolid, GRASS, WATER } from './blocks.js';
+import { isSolid, GRASS, WATER, COBBLE } from './blocks.js';
 import * as audio from './audio.js';
 
 // Each animal picks a body plan (shape) and its colours/sizes/speed. `aquatic`
@@ -20,14 +22,23 @@ const TYPES = {
   chicken: { shape: 'chicken', body: 0xffffff, head: 0xf2f2f2, w: 0.34, bh: 0.32, l: 0.4,  legH: 0.24, legW: 0.07, hd: 0.24, speed: 1.5, foot: 0xe6a020, comb: 0xd23b3b, hp: 4 },
   spider:  { shape: 'spider',  body: 0x2a2320, head: 0x1c1614, w: 0.7,  bh: 0.34, l: 0.7,  legH: 0.3,  legW: 0.07, hd: 0.4,  speed: 2.2, eye: 0xb03030, night: true, hp: 8, hostile: true, attack: 1 },
   squid:   { shape: 'squid',   aquatic: true, body: 0x7a2a5a, head: 0x7a2a5a, w: 0.5, bh: 0.66, l: 0.5, legW: 0.09, speed: 1.1, hp: 8, hostile: true, attack: 1 },
+  // The villagers — a mixed folk who spawn around the generated village and
+  // wander it (see Mobs.village / _spawnVillager). `hat` adds a brim + crown.
+  farmer:  { shape: 'biped', villager: true, body: 0x7d5a36, head: 0xdca575, w: 0.5,  bh: 0.72, l: 0.32, legH: 0.45, legW: 0.13, hd: 0.36, speed: 1.2, hp: 10, hat: 0xd8b04a },
+  smith:   { shape: 'biped', villager: true, body: 0x4d4a55, head: 0xc98d5f, w: 0.54, bh: 0.75, l: 0.34, legH: 0.46, legW: 0.14, hd: 0.38, speed: 1.1, hp: 12 },
+  elder:   { shape: 'biped', villager: true, body: 0xd9d2c4, head: 0xc9a17e, w: 0.5,  bh: 0.7,  l: 0.32, legH: 0.42, legW: 0.13, hd: 0.36, speed: 0.7, hp: 8, hat: 0xefefef },
+  kid:     { shape: 'biped', villager: true, body: 0x4f7dc9, head: 0xdca575, w: 0.38, bh: 0.5,  l: 0.26, legH: 0.3,  legW: 0.1,  hd: 0.3,  speed: 2.0, hp: 6 },
 };
 const TYPE_KEYS = Object.keys(TYPES);
-const LAND_KEYS = TYPE_KEYS.filter((k) => !TYPES[k].aquatic);
+const LAND_KEYS = TYPE_KEYS.filter((k) => !TYPES[k].aquatic && !TYPES[k].villager);
 const WATER_KEYS = TYPE_KEYS.filter((k) => TYPES[k].aquatic);
+const VILLAGER_KEYS = TYPE_KEYS.filter((k) => TYPES[k].villager);
 
 const GRAVITY = 24, TURN = 2.2;
-const TARGET_MOBS = 8;      // population kept alive around the player
+const TARGET_MOBS = 8;      // wild population kept alive around the player
 const SPAWN_MIN = 12, SPAWN_MAX = 26, DESPAWN = 42;
+const VILLAGER_TARGET = 4;  // villagers about, while the player is in town
+const VILLAGE_NEARBY = 24;  // how far past the village edge they still spawn
 
 // Combat tuning.
 const DETECT = 11;          // hostile aggro range (blocks)
@@ -202,7 +213,39 @@ function buildSquid(t, mats, group) {
   return legs;
 }
 
-const BUILDERS = { quad: buildQuad, chicken: buildChicken, spider: buildSpider, squid: buildSquid };
+// Villagers: legs, tunic body, swinging arms, and a head that can wear a hat
+// (straw brim for the farmer, white shock of hair for the elder).
+function buildBiped(t, mats, group) {
+  const limbs = [];
+  for (const sx of [-1, 1]) {                                 // legs
+    const g = makeLimb(t.legW, t.legH, t.legW, mats.leg, sx * t.w * 0.18, t.legH, 0);
+    group.add(g); limbs.push(g);
+  }
+  const body = new THREE.Mesh(new THREE.BoxGeometry(t.w, t.bh, t.l), mats.body);
+  body.position.y = t.legH + t.bh / 2;
+  group.add(body);
+  for (const sx of [-1, 1]) {                                 // arms at the shoulders
+    const g = makeLimb(t.legW, t.bh * 0.85, t.legW, mats.leg,
+      sx * (t.w / 2 + t.legW / 2 + 0.01), t.legH + t.bh - 0.02, 0);
+    group.add(g); limbs.push(g);
+  }
+  const head = new THREE.Mesh(new THREE.BoxGeometry(t.hd, t.hd, t.hd), mats.head);
+  head.position.set(0, t.legH + t.bh + t.hd / 2, 0);
+  addEyes(head, t.hd, 0.09, mats.eye);
+  group.add(head);
+  if (t.hat) {
+    const hatMat = new THREE.MeshLambertMaterial({ color: t.hat });
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(t.hd * 1.5, t.hd * 0.12, t.hd * 1.5), hatMat);
+    brim.position.y = t.hd * 0.46;
+    head.add(brim);
+    const crown = new THREE.Mesh(new THREE.BoxGeometry(t.hd * 0.85, t.hd * 0.3, t.hd * 0.85), hatMat);
+    crown.position.y = t.hd * 0.64;
+    head.add(crown);
+  }
+  return limbs;   // [legL, legR, armL, armR]
+}
+
+const BUILDERS = { quad: buildQuad, chicken: buildChicken, spider: buildSpider, squid: buildSquid, biped: buildBiped };
 
 // --- tiny voxel A* for hunters ----------------------------------------------
 // Moves: the four compass steps, a one-block climb, or a drop of up to
@@ -284,6 +327,7 @@ class Mob {
     this.chasing = false;        // was chasing last frame (gates the growl)
     this.kbx = 0; this.kbz = 0;  // knockback impulse, decays over time
     this.fleeT = 0;              // grazer panic timer after taking a hit
+    this.home = null;            // villagers: {x,z,r} they wander back toward
     this.path = null;            // hunter's current waypoint list (block coords)
     this.pathT = 0;              // cooldown between pathfinder calls
     this.pathAge = 0;            // how long we've trusted the current path
@@ -295,10 +339,12 @@ class Mob {
     const legCol = bodyCol.clone().multiplyScalar(0.8);
     // With a skin, the texture carries the colour (white tint) and limbs are
     // shaded a touch darker; without one, fall back to the flat body/head hues.
+    // Villagers are the exception: their skin texture is clothing, so the head
+    // keeps its flat face colour (fabric-textured faces look wrong).
     const mats = {
       body: skin ? new THREE.MeshLambertMaterial({ map: skin })
         : new THREE.MeshLambertMaterial({ color: bodyCol }),
-      head: skin ? new THREE.MeshLambertMaterial({ map: skin })
+      head: skin && !t.villager ? new THREE.MeshLambertMaterial({ map: skin })
         : new THREE.MeshLambertMaterial({ color: t.head }),
       leg: skin ? new THREE.MeshLambertMaterial({ map: skin, color: 0xcccccc })
         : new THREE.MeshLambertMaterial({ color: legCol }),
@@ -430,6 +476,12 @@ class Mob {
     if (chasing && !this.chasing) audio.playGrowl(this.pos);   // fair warning!
     this.chasing = chasing;
     if (!chasing) { this.path = null; this.stuckT = 0; }
+
+    // Villagers keep to their village: a stride past the edge turns homeward.
+    if (this.home && this.walking && !chasing) {
+      const hx = this.home.x - this.pos.x, hz = this.home.z - this.pos.z;
+      if (Math.hypot(hx, hz) > this.home.r) this.targetYaw = Math.atan2(-hx, -hz);
+    }
 
     let dy = this.targetYaw - this.yaw;
     while (dy > Math.PI) dy -= 2 * Math.PI;
@@ -597,6 +649,9 @@ class Mob {
     const legs = this.legs;
     if (this.shape === 'chicken') {
       legs[0].rotation.x = sw; legs[1].rotation.x = -sw;
+    } else if (this.shape === 'biped') {
+      legs[0].rotation.x = sw; legs[1].rotation.x = -sw;      // legs
+      legs[2].rotation.x = -sw * 0.7; legs[3].rotation.x = sw * 0.7;  // arms counter-swing
     } else if (this.shape === 'spider') {
       for (let i = 0; i < legs.length; i++)
         legs[i].rotation.x = Math.sin(this.phase + i * 0.8) * 0.22 * (moving ? 1 : 0.25);
@@ -619,6 +674,7 @@ export class Mobs {
     this.mobs = [];
     this.spawnTimer = 2;
     this.peaceful = false;    // per-world toggle: hostiles neither spawn nor attack
+    this.village = null;      // {x,z,radius} from the world config, when it has one
     loadMobSkins(textures);   // use any /static/textures/mob_<type>.png that exist
   }
 
@@ -626,13 +682,18 @@ export class Mobs {
     const playerPos = player.pos;
     // In peaceful mode mobs never see the player, which disables chase + bite.
     const target = this.peaceful ? null : player;
-    // Keep the world populated: top up toward the target count, refilling faster
-    // while we're short (e.g. just after something was killed or wandered off).
+    // Keep the world populated: top up toward the target counts, refilling
+    // faster while we're short (e.g. just after something was killed or
+    // wandered off). Villagers have their own quota, active while the player
+    // is in or near their village.
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
-      const short = this.mobs.length < TARGET_MOBS;
-      this.spawnTimer = short ? 0.8 + Math.random() * 1.2 : 2.5 + Math.random() * 3;
-      if (short) this._trySpawn(playerPos, daylight);
+      const vCount = this.mobs.reduce((n, m) => n + (m.t.villager ? 1 : 0), 0);
+      const vShort = vCount < this._villagersWanted(playerPos);
+      const short = this.mobs.length - vCount < TARGET_MOBS;
+      this.spawnTimer = (short || vShort) ? 0.8 + Math.random() * 1.2 : 2.5 + Math.random() * 3;
+      if (vShort) this._spawnVillager(playerPos);
+      else if (short) this._trySpawn(playerPos, daylight);
     }
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
@@ -704,9 +765,45 @@ export class Mobs {
     return null;
   }
 
+  // How many villagers should be about: full house while the player is in or
+  // near the village, none once they've left it far behind.
+  _villagersWanted(playerPos) {
+    const v = this.village;
+    if (!v) return 0;
+    const dist = Math.hypot(playerPos.x - v.x, playerPos.z - v.z);
+    return dist < v.radius + VILLAGE_NEARBY ? VILLAGER_TARGET : 0;
+  }
+
+  // Place one villager (random sort unless given) somewhere in the village —
+  // on grass, a path, or a floor, but never a roof. Returns true if spawned.
+  _spawnVillager(playerPos, type = null) {
+    const v = this.village;
+    if (!v || this._villagersWanted(playerPos) === 0) return false;
+    const ang = Math.random() * Math.PI * 2;
+    const d = 2 + Math.random() * (v.radius - 6);
+    const x = Math.floor(v.x + Math.cos(ang) * d);
+    const z = Math.floor(v.z + Math.sin(ang) * d);
+    for (let y = DIM.WY - 1; y > 1; y--) {
+      const b = this.world.getBlock(x, y, z);
+      if (!isSolid(b)) continue;
+      // Grass and cobble mark the village ground; anything else (a roof, the
+      // farm rows, the well) is no place to appear. Try again next tick.
+      if (b !== GRASS && b !== COBBLE) return false;
+      const spot = { x: x + 0.5, y: y + 1, z: z + 0.5 };
+      if (Math.hypot(spot.x - playerPos.x, spot.z - playerPos.z) < 5) return false;
+      const kind = type || VILLAGER_KEYS[Math.floor(Math.random() * VILLAGER_KEYS.length)];
+      const m = new Mob(this.scene, kind, spot.x, spot.y, spot.z);
+      m.home = { x: v.x + 0.5, z: v.z + 0.5, r: v.radius };
+      this.mobs.push(m);
+      return true;
+    }
+    return false;
+  }
+
   // Try to place one mob of `type` away from the player. Returns true if spawned.
   _spawnType(type, playerPos, daylight) {
     const t = TYPES[type];
+    if (t.villager) return this._spawnVillager(playerPos, type);
     if (this.peaceful && t.hostile) return false;      // friendly animals only
     if (t.night && daylight >= 0.35) return false;     // nocturnal, and it's daytime
     const spot = t.aquatic ? this._findWaterSpot(playerPos) : this._findLandSpot(playerPos);
