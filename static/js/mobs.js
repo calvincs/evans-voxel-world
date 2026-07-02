@@ -18,10 +18,10 @@ const TYPES = {
   pig:     { shape: 'quad',    body: 0xe89bb0, head: 0xe07a96, w: 0.62, bh: 0.5,  l: 0.9,  legH: 0.32, legW: 0.16, hd: 0.4,  speed: 1.5, hp: 8 },
   sheep:   { shape: 'quad',    body: 0xeae7dc, head: 0xd6c6ad, w: 0.62, bh: 0.6,  l: 0.8,  legH: 0.34, legW: 0.15, hd: 0.34, speed: 1.2, hp: 8 },
   cow:     { shape: 'quad',    body: 0x6e4b34, head: 0x4a3322, w: 0.72, bh: 0.62, l: 1.0,  legH: 0.42, legW: 0.18, hd: 0.42, speed: 1.1, hp: 10 },
-  wolf:    { shape: 'quad',    body: 0x9b9b9b, head: 0x8b8b8b, w: 0.48, bh: 0.48, l: 0.92, legH: 0.44, legW: 0.14, hd: 0.34, speed: 2.5, tail: true, hp: 12, hostile: true, attack: 2 },
+  wolf:    { shape: 'quad',    body: 0x9b9b9b, head: 0x8b8b8b, w: 0.48, bh: 0.48, l: 0.92, legH: 0.44, legW: 0.14, hd: 0.34, speed: 2.5, tail: true, hp: 12, hostile: true, attack: 2, nightHunter: true },
   chicken: { shape: 'chicken', body: 0xffffff, head: 0xf2f2f2, w: 0.34, bh: 0.32, l: 0.4,  legH: 0.24, legW: 0.07, hd: 0.24, speed: 1.5, foot: 0xe6a020, comb: 0xd23b3b, hp: 4 },
-  spider:  { shape: 'spider',  body: 0x2a2320, head: 0x1c1614, w: 0.7,  bh: 0.34, l: 0.7,  legH: 0.3,  legW: 0.07, hd: 0.4,  speed: 2.2, eye: 0xb03030, night: true, hp: 8, hostile: true, attack: 1 },
-  squid:   { shape: 'squid',   aquatic: true, body: 0x7a2a5a, head: 0x7a2a5a, w: 0.5, bh: 0.66, l: 0.5, legW: 0.09, speed: 1.1, hp: 8, hostile: true, attack: 1 },
+  spider:  { shape: 'spider',  body: 0x2a2320, head: 0x1c1614, w: 0.7,  bh: 0.34, l: 0.7,  legH: 0.3,  legW: 0.07, hd: 0.4,  speed: 2.2, eye: 0xb03030, night: true, hp: 8, hostile: true, attack: 1, nightHunter: true },
+  squid:   { shape: 'squid',   aquatic: true, body: 0x7a2a5a, head: 0x7a2a5a, w: 0.5, bh: 0.66, l: 0.5, legW: 0.09, speed: 1.1, hp: 8, hostile: true, attack: 1, nightHunter: true },
   // The villagers — a mixed folk who spawn around the generated village and
   // wander it (see Mobs.village / _spawnVillager). `hat` adds a brim + crown.
   farmer:  { shape: 'biped', villager: true, body: 0x7d5a36, head: 0xdca575, w: 0.5,  bh: 0.72, l: 0.32, legH: 0.45, legW: 0.13, hd: 0.36, speed: 1.2, hp: 10, hat: 0xd8b04a },
@@ -40,8 +40,16 @@ const SPAWN_MIN = 12, SPAWN_MAX = 26, DESPAWN = 42;
 const VILLAGER_TARGET = 4;  // villagers about, while the player is in town
 const VILLAGE_NEARBY = 24;  // how far past the village edge they still spawn
 
-// Combat tuning.
-const DETECT = 11;          // hostile aggro range (blocks)
+// Combat tuning. Night hunters (wolf, spider, squid) are only truly
+// aggressive after dark — with extended senses — or for a while after being
+// hit; by day they're docile, drifting away from players and only snapping
+// when crowded.
+const DETECT = 11;          // aggro range (blocks) — day (angered) baseline
+const DETECT_NIGHT = 18;    // night hunters sense much farther after dark
+const DAY_DEFEND = 2.5;     // docile daytime hunters still snap this close
+const DAY_AVOID = 7;        // ...and drift away from players inside this
+const ANGER_TIME = 12;      // seconds a hit keeps a docile hunter aggressive
+const MAX_MOBS = 48;        // hard cap so spawn eggs can't melt the machine
 const ATTACK_RANGE = 1.7;   // how close a hostile must be to land a hit
 const ATTACK_INTERVAL = 1.0;// seconds between a mob's hits
 const PLAYER_REACH = 3.4;   // how far the player's swing reaches a creature
@@ -327,6 +335,7 @@ class Mob {
     this.chasing = false;        // was chasing last frame (gates the growl)
     this.kbx = 0; this.kbz = 0;  // knockback impulse, decays over time
     this.fleeT = 0;              // grazer panic timer after taking a hit
+    this.angerT = 0;             // a hit makes a docile hunter aggressive a while
     this.home = null;            // villagers: {x,z,r} they wander back toward
     this.path = null;            // hunter's current waypoint list (block coords)
     this.pathT = 0;              // cooldown between pathfinder calls
@@ -370,6 +379,7 @@ class Mob {
   hurt(dmg, dir) {
     this.hp -= dmg;
     this.hurtFlash = 0.14;
+    if (this.hostile) this.angerT = ANGER_TIME;   // poking a docile hunter wakes it
     if (dir) {
       this.kbx = dir.x * 7; this.kbz = dir.z * 7;
       if (!this.aquatic && this.onGround) this.vel.y = Math.max(this.vel.y, 4.5);
@@ -439,9 +449,10 @@ class Mob {
     return world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) === WATER;
   }
 
-  update(dt, world, player) {
-    if (this.aquatic) this._swim(dt, world, player);
-    else this._walk(dt, world, player);
+  update(dt, world, player, daylight = 1) {
+    if (this.angerT > 0) this.angerT -= dt;
+    if (this.aquatic) this._swim(dt, world, player, daylight);
+    else this._walk(dt, world, player, daylight);
     this._animate(dt);
     if (this.attackCd > 0) this.attackCd -= dt;
     if (this.hurtFlash > 0) {
@@ -454,8 +465,10 @@ class Mob {
 
   // Land movement: wander, gravity + voxel collision, don't walk off cliffs.
   // Hostiles home in on a nearby player and bite; they'll hop down into holes
-  // and pathfind around corners to reach you. Grazers bolt for a bit when hit.
-  _walk(dt, world, player) {
+  // and pathfind around corners to reach you. Night hunters only do this
+  // after dark (with long senses) or while angered — by day they shy away
+  // from players and snap only when crowded. Grazers bolt for a bit when hit.
+  _walk(dt, world, player, daylight = 1) {
     this.timer -= dt;
     if (this.timer <= 0) this._chooseAction();
     if (this.fleeT > 0) this.fleeT -= dt;
@@ -464,13 +477,19 @@ class Mob {
     if (this.hostile && player) {
       const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
       const dist = Math.hypot(dx, dz);
-      if (dist < DETECT) {
+      const night = daylight < 0.35;
+      const aggressive = !this.t.nightHunter || night || this.angerT > 0;
+      const range = aggressive ? (night && this.t.nightHunter ? DETECT_NIGHT : DETECT) : DAY_DEFEND;
+      if (dist < range) {
         chasing = true;
         this.walking = true;
         this._steerChase(dt, world, player, dx, dz);
         // Bite range is 3-D so a wolf on the rim of your pit can't nip you
         // through two blocks of floor.
         this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
+      } else if (!aggressive && dist < DAY_AVOID) {
+        this.walking = true;                     // daylight: sidle away instead
+        this.targetYaw = Math.atan2(dx, dz);
       }
     }
     if (chasing && !this.chasing) audio.playGrowl(this.pos);   // fair warning!
@@ -590,7 +609,9 @@ class Mob {
   // Water movement: drift on a heading, turn back at the water's edge, and bob
   // up and down while staying fully submerged. A hunting squid also chases
   // depth: it dives or rises toward the player instead of holding spawn depth.
-  _swim(dt, world, player) {
+  // Like the land hunters, squid only hunt at night (with long senses) or
+  // when angered; by day they glide away from swimmers unless crowded.
+  _swim(dt, world, player, daylight = 1) {
     this.timer -= dt;
     if (this.timer <= 0) { this.targetYaw = this.yaw + (Math.random() - 0.5) * 3.0; this.timer = 1.5 + Math.random() * 2.5; }
 
@@ -598,13 +619,19 @@ class Mob {
     let dive = 0;
     if (this.hostile && player) {
       const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
-      if (Math.hypot(dx, dz) < DETECT) {
+      const dist = Math.hypot(dx, dz);
+      const night = daylight < 0.35;
+      const aggressive = !this.t.nightHunter || night || this.angerT > 0;
+      const range = aggressive ? (night && this.t.nightHunter ? DETECT_NIGHT : DETECT) : DAY_DEFEND;
+      if (dist < range) {
         this.targetYaw = Math.atan2(-dx, -dz);
         // Close the depth gap between body centre and the player's chest.
         const gap = (player.pos.y + 0.9) - (this.pos.y + this.t.bh * 0.5);
         if (Math.abs(gap) > 0.35) dive = Math.max(-this.t.speed, Math.min(this.t.speed, gap));
+        this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
+      } else if (!aggressive && dist < DAY_AVOID) {
+        this.targetYaw = Math.atan2(dx, dz);     // daylight: glide away instead
       }
-      this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
     }
 
     let dy = this.targetYaw - this.yaw;
@@ -697,12 +724,13 @@ export class Mobs {
     }
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
-      m.update(dt, this.world, target);
+      m.update(dt, this.world, target, daylight);
       if (m.hp <= 0) {   // killed — puff of its body colour, remove, and reseed
         this.world.spawnBreakBurst(m.pos.x, m.pos.y + 0.4, m.pos.z, m.t.body);
         audio.playMobDeath({ x: m.pos.x, y: m.pos.y + 0.4, z: m.pos.z });
         m.dispose(); this.mobs.splice(i, 1);
-        this._reseed(m.type, playerPos, daylight);   // replacement appears elsewhere
+        // Wild creatures get replaced elsewhere; player-hatched ones don't.
+        if (!m.noReseed) this._reseed(m.type, playerPos, daylight);
         continue;
       }
       if (m.pos.distanceTo(playerPos) > DESPAWN || m.pos.y < -6) { m.dispose(); this.mobs.splice(i, 1); }
@@ -836,6 +864,26 @@ export class Mobs {
     const m = new Mob(this.scene, type, x, y, z);
     this.mobs.push(m);
     return m;
+  }
+
+  // Hatch a creature from a spawn egg at cell (x,y,z) — the empty cell the
+  // player clicked toward. Water creatures must hatch into water; hatched on
+  // dry land they perish on the spot (with the usual puff). Player-hatched
+  // creatures never reseed the wild population when they die, and a hard cap
+  // keeps egg-spamming from melting the machine.
+  spawnFromEgg(type, x, y, z) {
+    const t = TYPES[type];
+    if (!t || this.mobs.length >= MAX_MOBS) return false;
+    const m = new Mob(this.scene, type, x + 0.5, y, z + 0.5);
+    m.noReseed = true;
+    if (t.villager && this.village) {
+      m.home = { x: this.village.x + 0.5, z: this.village.z + 0.5, r: this.village.radius };
+    }
+    this.mobs.push(m);
+    if (t.aquatic && this.world.getBlock(x, Math.floor(y + t.bh * 0.5), z) !== WATER) {
+      m.hurt(9999);            // a squid out of water doesn't last long
+    }
+    return true;
   }
 
   clear() {

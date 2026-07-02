@@ -29,11 +29,13 @@ TEST_JS = r"""
   mobs.spawnTimer = 1e9;              // no random spawns during the tests
 
   const fake = (x, y, z) => ({ pos: { x, y, z }, locked: false, frozen: true, dead: false });
-  const sim = (pl, seconds) => { const dt = 1 / 60; for (let i = 0; i < seconds * 60; i++) mobs.update(dt, pl, 1); };
+  // Hunters (wolf, spider, squid) are aggressive only at night, so chase
+  // scenarios sim with daylight 0; passive-creature scenarios use full day.
+  const sim = (pl, seconds, daylight = 1) => { const dt = 1 / 60; for (let i = 0; i < seconds * 60; i++) mobs.update(dt, pl, daylight); };
   const horiz = (m, pl) => Math.hypot(m.pos.x - pl.pos.x, m.pos.z - pl.pos.z);
 
   function buildPlatform() {
-    for (let x = X0; x <= X0 + 11; x++)
+    for (let x = X0; x <= X0 + 18; x++)
       for (let z = Z0; z <= Z0 + 4; z++) {
         for (let dy = 3; dy >= 0; dy--) S(x, PY - dy, z, STONE);   // 4-thick slab
         for (let dy = 1; dy <= 5; dy++) S(x, PY + dy, z, AIR);
@@ -52,7 +54,7 @@ TEST_JS = r"""
     digPit(pit.x, pit.z);
     const pl = fake(pit.x + 0.5, PY - 2, pit.z + 0.5);
     const w = mobs.spawnAt('wolf', X0 + 3.5, PY + 1, Z0 + 2.5);
-    sim(pl, 10);
+    sim(pl, 10, 0);
     results.pit = {
       wolfY: +w.pos.y.toFixed(2), horiz: +horiz(w, pl).toFixed(2),
       descended: w.pos.y < PY - 0.5, reached: horiz(w, pl) < 1.2 && Math.abs(w.pos.y - pl.pos.y) < 1.2,
@@ -67,17 +69,18 @@ TEST_JS = r"""
     S(wx, PY + 1, Z0, AIR); S(wx, PY + 2, Z0, AIR);   // doorway at the north edge
     const pl = fake(X0 + 9.5, PY + 1, Z0 + 2.5);
     const w = mobs.spawnAt('wolf', X0 + 3.5, PY + 1, Z0 + 2.5);
-    sim(pl, 15);
+    sim(pl, 15, 0);
     results.wall = {
       horiz: +horiz(w, pl).toFixed(2), reached: horiz(w, pl) < 1.6,
       pos: [+w.pos.x.toFixed(1), +w.pos.y.toFixed(1), +w.pos.z.toFixed(1)],
     };
   }
 
-  // C: squid dives down a 1x1 water well to a deep player.
+  // C: squid dives down a 1x1 water well to a deep player (at night).
   mobs.clear();
+  const WELL = { cx: P.x + 8, cz: P.z + 8 };
   {
-    const cx = P.x + 8, cz = P.z + 8, top = PY + 5, bot = PY - 4;
+    const { cx, cz } = WELL, top = PY + 5, bot = PY - 4;
     for (let x = cx - 1; x <= cx + 1; x++)
       for (let z = cz - 1; z <= cz + 1; z++)
         for (let y = bot; y <= top; y++)
@@ -85,7 +88,7 @@ TEST_JS = r"""
     const pl = fake(cx + 0.5, bot + 1, cz + 0.5);
     const sq = mobs.spawnAt('squid', cx + 0.5, top - 1.5, cz + 0.5);
     const startY = sq.pos.y;
-    sim(pl, 12);
+    sim(pl, 12, 0);
     results.squid = {
       startY: +startY.toFixed(2), endY: +sq.pos.y.toFixed(2),
       dove: sq.pos.y < startY - 3, nearPlayer: Math.abs(sq.pos.y - pl.pos.y) < 2.2,
@@ -108,6 +111,52 @@ TEST_JS = r"""
       ranEast: maxX > startX + 2.0, maxAdvance: +(maxX - startX).toFixed(2),
       stayedUp: pig.pos.y > PY + 0.5, pigY: +pig.pos.y.toFixed(2),
     };
+  }
+
+  // E: day/night temperament — wolves avoid by day, snap when crowded, turn
+  // aggressive for a while when hit, and hunt from far away at night.
+  buildPlatform(); mobs.clear();
+  {
+    const pl = fake(X0 + 6.5, PY + 1, Z0 + 2.5);
+    const w = mobs.spawnAt('wolf', X0 + 2.5, PY + 1, Z0 + 2.5);   // 4 away
+    sim(pl, 3, 1);                                   // full daylight
+    const dayAvoids = horiz(w, pl) > 5.5 && !w.chasing;
+    w.pos.set(pl.pos.x + 1.8, PY + 1, pl.pos.z);     // crowd it by day
+    sim(pl, 1.5, 1);
+    const daySnaps = w.chasing;
+    mobs.clear();
+    const w2 = mobs.spawnAt('wolf', X0 + 2.5, PY + 1, Z0 + 2.5);
+    const pl2 = fake(X0 + 11.5, PY + 1, Z0 + 2.5);   // 9 away: calm daytime range
+    sim(pl2, 2, 1);
+    const calmBefore = !w2.chasing;
+    w2.hurt(1, { x: 0, y: 0, z: 0 });                // poke it
+    sim(pl2, 5, 1);
+    const angryAfterHit = horiz(w2, pl2) < 3;        // came for us in daylight
+    mobs.clear();
+    const w3 = mobs.spawnAt('wolf', X0 + 1.5, PY + 1, Z0 + 2.5);
+    const pl3 = fake(X0 + 16.5, PY + 1, Z0 + 2.5);   // 15 away: beyond day senses
+    sim(pl3, 8, 0);                                  // night: extended senses
+    const nightHuntsFar = horiz(w3, pl3) < 3;
+    results.temperament = { dayAvoids, daySnaps, calmBefore, angryAfterHit, nightHuntsFar };
+  }
+
+  // F: spawn eggs — land creatures hatch anywhere; water creatures die on dry
+  // land (with no wild replacement), and live when hatched into water.
+  buildPlatform(); mobs.clear();
+  {
+    const pl = fake(X0 + 2.5, PY + 1, Z0 + 2.5);
+    const pigOk = mobs.spawnFromEgg('pig', X0 + 6, PY + 1, Z0 + 2);
+    sim(pl, 0.5, 1);
+    const pigAlive = mobs.mobs.some((m) => m.type === 'pig');
+    const before = mobs.mobs.length;
+    mobs.spawnFromEgg('squid', X0 + 9, PY + 1, Z0 + 2);   // dry land!
+    sim(pl, 0.5, 1);
+    const drySquidDied = !mobs.mobs.some((m) => m.type === 'squid');
+    const noReseed = mobs.mobs.length === before;
+    const wetOk = mobs.spawnFromEgg('squid', WELL.cx, PY, WELL.cz);  // into the well
+    sim(pl, 0.5, 1);
+    const wetSquidAlive = mobs.mobs.some((m) => m.type === 'squid');
+    results.eggs = { pigOk, pigAlive, drySquidDied, noReseed, wetOk, wetSquidAlive };
   }
 
   mobs.clear();
@@ -177,7 +226,9 @@ def main():
     ok = (results["pit"]["descended"] and results["pit"]["reached"]
           and results["wall"]["reached"]
           and results["squid"]["dove"] and results["squid"]["nearPlayer"]
-          and results["flee"]["ranEast"] and results["flee"]["stayedUp"])
+          and results["flee"]["ranEast"] and results["flee"]["stayedUp"]
+          and all(results["temperament"].values())
+          and all(results["eggs"].values()))
     print("RESULT:", "ALL PASS" if ok else "SOME FAILED")
     sys.exit(0 if ok else 2)
 

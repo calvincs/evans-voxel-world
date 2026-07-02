@@ -18,6 +18,7 @@ import { Mobs } from './mobs.js';
 import { Gear } from './gear.js';
 import {
   buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, ATLAS_COLS, TILE_PX, blockColor, WATER,
+  isSpawnEgg, SPAWN_EGGS, EGG_COLORS,
 } from './blocks.js';
 
 const $ = (id) => document.getElementById(id);
@@ -880,14 +881,33 @@ async function startGame(worldId, demo) {
 }
 
 // --- HUD ---------------------------------------------------------------------
-// Draw a block's face icon from the atlas into a canvas.
+// Draw a block's face icon from the atlas into a canvas. Spawn eggs aren't
+// blocks: they get a painted speckled egg in the creature's body colour.
 function drawBlockIcon(canvas, atlasCanvas, block, size) {
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, size, size);
+  if (isSpawnEgg(block)) { drawEggIcon(ctx, block, size); return; }
   const t = BLOCKS[block].side;
   ctx.drawImage(atlasCanvas, (t % ATLAS_COLS) * TILE_PX, Math.floor(t / ATLAS_COLS) * TILE_PX,
     TILE_PX, TILE_PX, 0, 0, size, size);
+}
+
+function drawEggIcon(ctx, block, size) {
+  const col = EGG_COLORS[SPAWN_EGGS[block]] ?? 0xaaaaaa;
+  ctx.fillStyle = `#${col.toString(16).padStart(6, '0')}`;
+  ctx.beginPath();
+  ctx.ellipse(size / 2, size * 0.56, size * 0.3, size * 0.38, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.lineWidth = Math.max(1, size / 20);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';    // speckles
+  for (const [fx, fy, r] of [[0.42, 0.42, 0.05], [0.58, 0.5, 0.04], [0.48, 0.66, 0.045], [0.62, 0.66, 0.03]]) {
+    ctx.beginPath();
+    ctx.arc(size * fx, size * fy, size * r, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function buildHotbar(atlasCanvas, player) {

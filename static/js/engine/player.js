@@ -3,7 +3,7 @@
 // place.
 
 import * as THREE from 'three';
-import { isSolid, AIR, WATER, HOTBAR, TNT, FIRESTONE, isTool, blockColor } from '../blocks.js';
+import { isSolid, AIR, WATER, HOTBAR, TNT, FIRESTONE, isTool, blockColor, isSpawnEgg, SPAWN_EGGS } from '../blocks.js';
 import * as audio from '../audio.js';
 import { Character } from './character.js';
 
@@ -475,6 +475,11 @@ export class Player {
       } else {
         audio.playIgnite();                    // just a spark
       }
+      return;
+    }
+    if (isSpawnEgg(held)) {                    // hatch a creature, not a block
+      const { x, y, z } = r.prev;
+      if (this.mobs && this.mobs.spawnFromEgg(SPAWN_EGGS[held], x, y, z)) audio.playPlace();
       return;
     }
     if (isTool(held)) return;                  // other tools don't place

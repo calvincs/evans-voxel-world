@@ -39,7 +39,23 @@ export const isProx = (b) => b === PROX_OFF || b === PROX_OTHERS || b === PROX_A
 // Tools live in the hotbar but are never placed as world blocks. Firestone
 // strikes blocks: lights TNT and pumpkins, arms mines, sets elevators.
 export const FIRESTONE = 100;
-const TOOLS = new Set([FIRESTONE]);
+
+// Creature spawn eggs: inventory items, not blocks — "placing" one hatches
+// the creature into the clicked cell (player._place -> mobs.spawnFromEgg).
+// EGG_COLORS mirror each creature's body colour in mobs.js TYPES; keep them
+// in sync when adding types.
+export const SPAWN_EGGS = {
+  110: 'pig', 111: 'sheep', 112: 'cow', 113: 'chicken', 114: 'wolf',
+  115: 'spider', 116: 'squid', 117: 'farmer', 118: 'smith', 119: 'elder', 120: 'kid',
+};
+export const isSpawnEgg = (b) => b in SPAWN_EGGS;
+export const EGG_COLORS = {
+  pig: 0xe89bb0, sheep: 0xeae7dc, cow: 0x6e4b34, chicken: 0xffffff,
+  wolf: 0x9b9b9b, spider: 0x2a2320, squid: 0x7a2a5a,
+  farmer: 0x7d5a36, smith: 0x4d4a55, elder: 0xd9d2c4, kid: 0x4f7dc9,
+};
+
+const TOOLS = new Set([FIRESTONE, ...Object.keys(SPAWN_EGGS).map(Number)]);
 export const isTool = (b) => TOOLS.has(b);
 
 // Atlas layout: 8x16 grid of 16px tiles (grew a row block for the four
@@ -121,6 +137,12 @@ export const BLOCKS = {
   [PROX_ALL]:    { name: 'Proximity Mine (EVERYONE)', top: TILE.prox_all,    side: TILE.prox_all,    bottom: TILE.prox_all },
   [FIRESTONE]:{ name: 'Firestone (magic striker)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
 };
+// Spawn eggs have painted icons (drawEggIcon), not atlas tiles — the entry
+// carries just the name. Water creatures note their one rule in the tooltip.
+for (const [id, type] of Object.entries(SPAWN_EGGS)) {
+  const label = type[0].toUpperCase() + type.slice(1);
+  BLOCKS[id] = { name: type === 'squid' ? `${label} Egg (needs water!)` : `${label} Egg` };
+}
 for (let i = 1; i <= ELEV_MAX; i++) {
   const t = (name) => ({ top: TILE[`${name}_${i}`], side: TILE[`${name}_${i}`],
                          bottom: TILE[`${name}_${i}`] });
@@ -155,6 +177,7 @@ export const ALL_BLOCKS = [
   SNOW, BRICK, GLASS, WATER, GLOWSTONE, GOLD, DIAMOND, PUMPKIN,
   WOOL_RED, WOOL_BLUE, RAINBOW, TNT, PROX_OFF, ELEV_UP, ELEV_SIDE,
   FLINT, FIRESTONE,
+  ...Object.keys(SPAWN_EGGS).map(Number),   // creature eggs, one per species
 ];
 
 // --- Procedural pixel-art tiles ---------------------------------------------
