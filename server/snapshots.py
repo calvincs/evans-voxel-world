@@ -14,11 +14,14 @@ last day is kept, older ones are thinned to one per hour for a week, then droppe
 """
 
 import json
+import logging
 import os
 import random
 import re
 import threading
 import time
+
+log = logging.getLogger("uvicorn.error")
 
 DAY = 24 * 3600
 WEEK = 7 * DAY
@@ -149,10 +152,14 @@ class SnapshotStore:
     # --- housekeeping ---------------------------------------------------------
     def prune(self, wid: str):
         """Rolling window: keep all snapshots from the last day; between one day
-        and one week old keep only the newest per hour; drop anything older."""
+        and one week old keep only the newest per hour; drop anything older —
+        except the newest snapshot, which is always kept no matter its age: it
+        is the rebuild source if the world file is ever corrupted."""
         snaps = self._all(wid)          # newest first
         now = _now()
         keep, seen_hours = set(), set()
+        if snaps:
+            keep.add(snaps[0]["id"])
         for s in snaps:
             age = now - s["ts"]
             if age <= DAY:
@@ -170,6 +177,35 @@ class SnapshotStore:
                         os.remove(self._path(wid, s["id"]))
                     except OSError:
                         pass
+
+    def sweep(self, known_wids: set[str]):
+        """Startup housekeeping. Removes stale .tmp files (torn writes from a
+        crash), applies the retention window to every known world (idle worlds
+        otherwise never shrink), and reports — but never deletes — snapshot
+        dirs whose world no longer exists, so no tool ever throws away save
+        data on its own."""
+        if not os.path.isdir(self.dir):
+            return
+        orphans = []
+        for name in os.listdir(self.dir):
+            wdir = os.path.join(self.dir, name)
+            if not os.path.isdir(wdir):
+                continue
+            for fn in os.listdir(wdir):
+                if fn.endswith(".tmp"):
+                    try:
+                        os.remove(os.path.join(wdir, fn))
+                    except OSError:
+                        pass
+            if name in known_wids:
+                self.prune(name)
+            else:
+                orphans.append(name)
+        if orphans:
+            log.warning(
+                "snapshots: %d dir(s) have no matching world (left untouched — "
+                "delete by hand if unwanted): %s",
+                len(orphans), ", ".join(sorted(orphans)))
 
     def delete_world(self, wid: str):
         """Remove all snapshots for a world (called when the world is deleted)."""

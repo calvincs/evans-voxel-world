@@ -115,6 +115,37 @@ def main():
           any(f.startswith(f'{w6["id"]}.json.corrupt-')
               for f in os.listdir(os.path.join(root, "worlds"))))
 
+    # --- prune always keeps the newest snapshot, however old --------------------
+    import time as _time
+    snaps7, store7 = fresh_stores(root)
+    w7 = store7.create("Old World")
+    store7.set_block(w7["id"], 0, 30, 0, 4)   # triggers the auto snapshot
+    old = snaps7.list(w7["id"])[0]
+    # Age the snapshot two weeks by rewriting its ts (retention would drop it).
+    p7 = os.path.join(root, "snapshots", w7["id"], f'{old["id"]}.json')
+    with open(p7) as f:
+        d = json.load(f)
+    d["ts"] -= 14 * 24 * 3600
+    with open(p7, "w") as f:
+        json.dump(d, f)
+    snaps7._last_ts.pop(w7["id"], None)
+    snaps7.prune(w7["id"])
+    check("prune keeps the newest snapshot no matter its age",
+          len(snaps7.list(w7["id"])) == 1)
+
+    # --- startup sweep: prunes known worlds, keeps orphans, drops .tmp ----------
+    orphan_dir = os.path.join(root, "snapshots", "w_orphan")
+    os.makedirs(orphan_dir, exist_ok=True)
+    with open(os.path.join(orphan_dir, "123_beef.json"), "w") as f:
+        json.dump({"id": "123_beef", "ts": 123, "edits": {}}, f)
+    with open(os.path.join(orphan_dir, "torn.json.tmp"), "w") as f:
+        f.write("{half")
+    snaps7.sweep({w7["id"]})
+    check("sweep removes torn .tmp files",
+          not os.path.exists(os.path.join(orphan_dir, "torn.json.tmp")))
+    check("sweep never deletes orphaned snapshots",
+          os.path.exists(os.path.join(orphan_dir, "123_beef.json")))
+
     print(f"\nall {PASS} checks passed")
 
 

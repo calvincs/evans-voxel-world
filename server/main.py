@@ -51,6 +51,9 @@ snapshots = SnapshotStore(SNAP_DIR)
 store = WorldStore(WORLDS_DIR, legacy_path=LEGACY_PATH,
                    snapshots=snapshots, snapshot_interval=SNAP_INTERVAL,
                    chunk_x=worldgen.CHUNK_X, chunk_z=worldgen.CHUNK_Z)
+# Startup housekeeping: clear torn .tmp writes, apply retention to idle worlds,
+# and report orphaned snapshot dirs (never auto-deleted).
+snapshots.sweep({fn[:-5] for fn in os.listdir(WORLDS_DIR) if fn.endswith(".json")})
 users = UserStore(USERS_PATH)
 sessions = SessionStore(SESSIONS_PATH)
 

@@ -24,3 +24,6 @@ static/audio/*.mp3
 !static/audio/place.mp3
 !static/audio/step.mp3
 !static/audio/explode.mp3
+
+# Local save-data backups (tools/backup.sh)
+/backups/

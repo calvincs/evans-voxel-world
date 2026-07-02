@@ -4,6 +4,26 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Backups, auto-restart, snapshot housekeeping
+
+**Why:** snapshots protect against bad edits, not a dying disk — and a server
+crash used to take the game down until someone restarted it by hand. Also,
+snapshots of worlds nobody plays (and stale `.tmp` files from torn writes)
+were never cleaned up.
+
+**What changed:**
+- New `tools/backup.sh` — tars `data/` into `backups/` (or `EVANS_BACKUP_DIR`,
+  ideally another drive) and keeps the newest 14. One cron line makes it
+  nightly; instructions are in the script.
+- New `tools/evansgame.service` — a systemd user unit so the game starts on
+  boot and restarts itself after a crash. Install instructions inside.
+- Startup sweep (`server/snapshots.py`): removes torn `.tmp` snapshot files,
+  applies the retention window to idle worlds, and *reports* orphaned snapshot
+  dirs without ever deleting them.
+- Retention now always keeps a world's newest snapshot no matter how old — it
+  is the rebuild source if the world file is ever corrupted.
+- `tools/test_storage.py` grew to 22 checks (prune/sweep coverage).
+
 ## 2026-07-02 — Corrupt worlds heal themselves
 
 **Why:** if a world file ever failed to parse (e.g. after a power cut), the

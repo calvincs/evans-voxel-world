@@ -1,0 +1,25 @@
+# Run Evan's Voxel World as a systemd user service, so it starts on boot and
+# restarts itself if it ever crashes (no more "dad, the game is down").
+#
+# Install (adjust WorkingDirectory/ExecStart if the game lives elsewhere):
+#   mkdir -p ~/.config/systemd/user
+#   cp tools/evansgame.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now evansgame
+#   loginctl enable-linger $USER     # keep it running when logged out
+#
+# Logs:  journalctl --user -u evansgame -f
+
+[Unit]
+Description=Evan's Voxel World
+After=network.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/Desktop/EvansGame
+ExecStart=%h/Desktop/EvansGame/run.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
