@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { DIM, RENDER_DISTANCE } from './constants.js';
 import { Chunk } from './chunk.js';
-import { AIR, STONE, WATER, TNT, isGlow } from '../blocks.js';
+import { AIR, STONE, WATER, TNT, isGlow, isProx } from '../blocks.js';
 import * as audio from '../audio.js';
 
 const key = (cx, cz) => `${cx},${cz}`;
@@ -422,11 +422,14 @@ export class World {
   }
 
   // --- TNT ------------------------------------------------------------------
-  // Light a TNT block: it flashes for a moment, then explodes.
+  // Light an explosive block — TNT or a proximity mine: it flashes for a
+  // moment, then explodes. The fuse set dedupes, so a mine that's both caught
+  // in a blast and tripped by proximity still only goes off once.
   igniteTNT(x, y, z, fuse = FUSE) {
     const k = `${x},${y},${z}`;
     if (this.fuseKeys.has(k)) return;          // already primed
-    if (this.getBlock(x, y, z) !== TNT) return;
+    const b = this.getBlock(x, y, z);
+    if (b !== TNT && !isProx(b)) return;
     this.fuseKeys.add(k);
     const mesh = new THREE.Mesh(this._primeGeo, this._primeMat);
     mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
@@ -452,7 +455,9 @@ export class World {
           if (by < 0) continue;
           const b = this.getBlock(bx, by, bz);
           if (b === AIR) continue;
-          if (b === TNT && !(dx === 0 && dy === 0 && dz === 0)) {
+          // Explosives caught in the blast go off themselves — TNT sets off
+          // mines and mines set off TNT, in any combination.
+          if ((b === TNT || isProx(b)) && !(dx === 0 && dy === 0 && dz === 0)) {
             this.igniteTNT(bx, by, bz, 0.1 + Math.random() * 0.15);  // chain reaction
             continue;
           }

@@ -5,8 +5,9 @@
 //      light source at night); another strike snuffs it.
 //   💣 Proximity mines — strikes cycle OFF → watch-OTHERS → watch-EVERYONE →
 //      OFF. Arming takes 5s (time to walk away); when something wanders close
-//      the mine blinks for 2s — strike it in time to defuse, or it blows like
-//      TNT (creatures caught in the blast die outright).
+//      a live mine blows instantly, like TNT (creatures caught in the blast
+//      die outright). Explosions chain both ways: a blast sets off nearby
+//      mines and TNT alike.
 //   ⬆➡ Elevators — strikes set the travel distance (1..10, wrapping back to
 //      1); the number is painted on the block. Stand on one and it glides out;
 //      step off and it comes home and lands.
@@ -45,7 +46,6 @@ const ELEV_INFO = {
 };
 
 const MINE_ARM_DELAY = 5;    // seconds from arming strike to a live sensor
-const MINE_DEFUSE = 2;       // seconds from trip to boom
 const MINE_RANGE = 2.5;      // trigger distance from the block centre
 const ELEV_SPEED = 2.5;      // platform speed, blocks/second
 const RIDE_GRACE = 0.5;      // seconds off the platform before it heads home
@@ -69,8 +69,6 @@ export class Gear {
     this._blockGeo = new THREE.BoxGeometry(1, 1, 1);
     this._armMat = new THREE.MeshBasicMaterial({
       color: 0xffffff, transparent: true, opacity: 0.4, depthWrite: false });
-    this._tripMat = new THREE.MeshBasicMaterial({
-      color: 0xff4030, transparent: true, opacity: 0.55, depthWrite: false });
     this._matCache = new Map();   // block id -> platform material
   }
 
@@ -118,14 +116,7 @@ export class Gear {
   // --- Proximity mines --------------------------------------------------------
   _strikeMine(x, y, z, block, pos) {
     const k = key(x, y, z);
-    const mine = this.mines.get(k);
     audio.playIgnite(pos);
-    if (mine && mine.state === 'tripped') {            // last-second save
-      this._dropMine(k);
-      this.world.setBlock(x, y, z, PROX_OFF);
-      this.msg('💣 Phew — defused!');
-      return;
-    }
     if (block === PROX_OFF) {
       this.world.setBlock(x, y, z, PROX_OTHERS);
       this._armMine(k, x, y, z);
@@ -152,7 +143,6 @@ export class Gear {
     }
     m.state = 'arming';
     m.t = MINE_ARM_DELAY;
-    m.tick = 0;
     m.mesh.material = this._armMat;
     m.mesh.visible = true;
   }
@@ -179,23 +169,13 @@ export class Gear {
         }
       } else if (m.state === 'live') {
         if (this._proximity(m.x, m.y, m.z, b === PROX_ALL) < MINE_RANGE) {
-          m.state = 'tripped';
-          m.t = MINE_DEFUSE;
-          m.mesh.material = this._tripMat;
-        }
-      } else if (m.state === 'tripped') {
-        m.t -= dt;
-        m.mesh.visible = Math.floor(m.t * 10) % 2 === 0;  // frantic blink
-        m.tick -= dt;
-        if (m.tick <= 0) {
-          m.tick = 0.33;
-          audio.playIgnite({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
-        }
-        if (m.t <= 0) {
+          // No second chances: the sensor fires the charge on contact. Routed
+          // through the shared fuse (at zero length) so a mine that's also
+          // caught in someone else's blast can't detonate twice. The crater is
+          // persisted + relayed; main.js's explosion hook applies player
+          // damage and kills creatures caught in it.
           this._dropMine(k);
-          // TNT-sized boom: crater is persisted + relayed; main.js's explosion
-          // hook applies player damage and kills creatures caught in it.
-          this.world._explode(m.x, m.y, m.z);
+          this.world.igniteTNT(m.x, m.y, m.z, 0);
         }
       }
     }
