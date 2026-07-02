@@ -18,13 +18,20 @@ export const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5,
 // which is just a block swap — so it persists and syncs like any other edit.
 export const PUMPKIN_LIT = 24;                                // jack-o'-lantern
 export const PROX_OFF = 25, PROX_OTHERS = 26, PROX_ALL = 27;  // proximity mine modes
-// Elevators: ten consecutive ids each; the id itself encodes the set travel
-// distance (1..10), which the block texture displays.
-export const ELEV_UP = 30, ELEV_SIDE = 40, ELEV_MAX = 10;
+// Elevators: ten consecutive ids per direction; the id itself encodes the set
+// travel distance (1..10), which the block texture displays. The 11th strike
+// flips the direction (up<->down, forward<->reverse) and restarts at 1.
+export const ELEV_UP = 30, ELEV_SIDE = 40, ELEV_DOWN = 50, ELEV_SIDE_REV = 60,
+             ELEV_MAX = 10;
 export const isElevUp = (b) => b >= ELEV_UP && b < ELEV_UP + ELEV_MAX;
 export const isElevSide = (b) => b >= ELEV_SIDE && b < ELEV_SIDE + ELEV_MAX;
+export const isElevDown = (b) => b >= ELEV_DOWN && b < ELEV_DOWN + ELEV_MAX;
+export const isElevSideRev = (b) => b >= ELEV_SIDE_REV && b < ELEV_SIDE_REV + ELEV_MAX;
 export const elevCount = (b) =>
-  isElevUp(b) ? b - ELEV_UP + 1 : isElevSide(b) ? b - ELEV_SIDE + 1 : 0;
+  isElevUp(b) ? b - ELEV_UP + 1 :
+  isElevSide(b) ? b - ELEV_SIDE + 1 :
+  isElevDown(b) ? b - ELEV_DOWN + 1 :
+  isElevSideRev(b) ? b - ELEV_SIDE_REV + 1 : 0;
 export const isProx = (b) => b === PROX_OFF || b === PROX_OTHERS || b === PROX_ALL;
 
 // Tools live in the hotbar but are never placed as world blocks. Firestone
@@ -33,8 +40,9 @@ export const FIRESTONE = 100;
 const TOOLS = new Set([FIRESTONE]);
 export const isTool = (b) => TOOLS.has(b);
 
-// Atlas layout: 8x8 grid of 16px tiles (room to grow).
-export const ATLAS_COLS = 8, ATLAS_ROWS = 8, TILE_PX = 16;
+// Atlas layout: 8x16 grid of 16px tiles (grew a row block for the four
+// elevator-direction counter sets; still plenty of room).
+export const ATLAS_COLS = 8, ATLAS_ROWS = 16, TILE_PX = 16;
 
 // tile name -> atlas slot index (col = i%COLS, row = floor(i/COLS))
 const TILE = {
@@ -47,10 +55,12 @@ const TILE = {
   mossy: 25, marble: 26, rainbow: 27,
   pumpkin_lit: 28, prox_off: 29, prox_others: 30, prox_all: 31,
 };
-// Elevator counter tiles: slots 32..41 (up 1..10) and 42..51 (side 1..10).
+// Elevator counter tiles: 32..41 up, 42..51 side, 52..61 down, 62..71 reverse.
 for (let i = 1; i <= ELEV_MAX; i++) {
   TILE[`elev_up_${i}`] = 31 + i;
   TILE[`elev_side_${i}`] = 41 + i;
+  TILE[`elev_down_${i}`] = 51 + i;
+  TILE[`elev_side_rev_${i}`] = 61 + i;
 }
 
 // Blocks that emit light (rendered with an emissive glow material and fed to
@@ -68,7 +78,9 @@ const BLOCK_COLOR = {
 };
 for (let i = 0; i < ELEV_MAX; i++) {
   BLOCK_COLOR[ELEV_UP + i] = 0x7f93a8;
+  BLOCK_COLOR[ELEV_DOWN + i] = 0x7f93a8;
   BLOCK_COLOR[ELEV_SIDE + i] = 0xa8937f;
+  BLOCK_COLOR[ELEV_SIDE_REV + i] = 0xa8937f;
 }
 export const blockColor = (b) => BLOCK_COLOR[b] ?? 0xaaaaaa;
 
@@ -107,6 +119,10 @@ for (let i = 1; i <= ELEV_MAX; i++) {
     top: TILE[`elev_up_${i}`], side: TILE[`elev_up_${i}`], bottom: TILE[`elev_up_${i}`] };
   BLOCKS[ELEV_SIDE + i - 1] = { name: `Side Elevator (${i})`,
     top: TILE[`elev_side_${i}`], side: TILE[`elev_side_${i}`], bottom: TILE[`elev_side_${i}`] };
+  BLOCKS[ELEV_DOWN + i - 1] = { name: `Down Elevator (${i})`,
+    top: TILE[`elev_down_${i}`], side: TILE[`elev_down_${i}`], bottom: TILE[`elev_down_${i}`] };
+  BLOCKS[ELEV_SIDE_REV + i - 1] = { name: `Side Elevator (reverse ${i})`,
+    top: TILE[`elev_side_rev_${i}`], side: TILE[`elev_side_rev_${i}`], bottom: TILE[`elev_side_rev_${i}`] };
 }
 
 // Transparent for face-culling purposes (a face is drawn against these).
@@ -207,17 +223,30 @@ function drawDigits(c, n, color) {
 }
 
 // Elevator tile: metal pad, a direction chevron, and the set distance in big
-// digits — "the count on the outside of the cube".
-const elevatorTile = (n, up) => (c) => {
-  speckle(c, up ? '#7f93a8' : '#a8937f', 60 + n + (up ? 0 : 30), 16);
+// digits — "the count on the outside of the cube". Vertical elevators are
+// steel-blue (green ^ up / red v down); horizontal are tan (yellow > forward /
+// sky-blue < reverse).
+const ELEV_STYLE = {
+  up:   { body: '#7f93a8', mark: '#8dffab', salt: 60 },
+  down: { body: '#7f93a8', mark: '#ff8d7d', salt: 90 },
+  fwd:  { body: '#a8937f', mark: '#ffd34d', salt: 120 },
+  rev:  { body: '#a8937f', mark: '#9ad1ff', salt: 150 },
+};
+const elevatorTile = (n, kind) => (c) => {
+  const st = ELEV_STYLE[kind];
+  speckle(c, st.body, st.salt + n, 16);
   c.fillStyle = 'rgba(0,0,0,0.4)';                  // frame
   c.fillRect(0, 0, 16, 1); c.fillRect(0, 15, 16, 1);
   c.fillRect(0, 0, 1, 16); c.fillRect(15, 0, 1, 16);
-  c.fillStyle = up ? '#8dffab' : '#ffd34d';
-  if (up) {                                          // ^ chevron
+  c.fillStyle = st.mark;
+  if (kind === 'up') {                               // ^
     for (let i = 0; i < 3; i++) { c.fillRect(7 - i, 2 + i, 1, 1); c.fillRect(8 + i, 2 + i, 1, 1); }
-  } else {                                           // > chevron
+  } else if (kind === 'down') {                      // v
+    for (let i = 0; i < 3; i++) { c.fillRect(7 - i, 4 - i, 1, 1); c.fillRect(8 + i, 4 - i, 1, 1); }
+  } else if (kind === 'fwd') {                       // >
     for (let i = 0; i < 3; i++) { c.fillRect(9 + i, 1 + i, 1, 1); c.fillRect(9 + i, 5 - i, 1, 1); }
+  } else {                                           // <
+    for (let i = 0; i < 3; i++) { c.fillRect(6 - i, 1 + i, 1, 1); c.fillRect(6 - i, 5 - i, 1, 1); }
   }
   drawDigits(c, n, '#ffffff');
 };
@@ -399,8 +428,10 @@ const TILE_PAINTERS = {
   },
 };
 for (let i = 1; i <= ELEV_MAX; i++) {
-  TILE_PAINTERS[`elev_up_${i}`] = elevatorTile(i, true);
-  TILE_PAINTERS[`elev_side_${i}`] = elevatorTile(i, false);
+  TILE_PAINTERS[`elev_up_${i}`] = elevatorTile(i, 'up');
+  TILE_PAINTERS[`elev_side_${i}`] = elevatorTile(i, 'fwd');
+  TILE_PAINTERS[`elev_down_${i}`] = elevatorTile(i, 'down');
+  TILE_PAINTERS[`elev_side_rev_${i}`] = elevatorTile(i, 'rev');
 }
 
 // Build the atlas texture. Uses /static/textures/<name>.png when present (only
@@ -408,9 +439,9 @@ for (let i = 1; i <= ELEV_MAX; i++) {
 // paints the procedural tile. Returns a Promise<THREE.Texture>.
 export async function buildAtlasTexture(available = []) {
   const overrides = new Set(available);
-  const size = ATLAS_COLS * TILE_PX;
   const atlas = document.createElement('canvas');
-  atlas.width = size; atlas.height = size;
+  atlas.width = ATLAS_COLS * TILE_PX;
+  atlas.height = ATLAS_ROWS * TILE_PX;
   const actx = atlas.getContext('2d');
 
   const loadOverride = (name) => new Promise((resolve) => {

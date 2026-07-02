@@ -19,11 +19,24 @@ import * as THREE from 'three';
 import * as audio from './audio.js';
 import {
   AIR, PUMPKIN, PUMPKIN_LIT, PROX_OFF, PROX_OTHERS, PROX_ALL,
-  ELEV_UP, ELEV_SIDE, ELEV_MAX, isElevUp, isElevSide, elevCount, isProx,
+  ELEV_UP, ELEV_SIDE, ELEV_DOWN, ELEV_SIDE_REV, ELEV_MAX, elevCount, isProx,
   isSolid, BLOCKS, ATLAS_COLS, TILE_PX,
 } from './blocks.js';
 
 const key = (x, y, z) => `${x},${y},${z}`;
+
+// Per-direction elevator behavior: display arrow, what the 11th strike flips
+// to, and how to phrase it.
+const ELEV_INFO = {
+  [ELEV_UP]:       { arrow: '⬆', kind: 'up',   flipTo: ELEV_DOWN,
+                     flipMsg: '⬇ Flipped! Elevator now goes DOWN — set to 1' },
+  [ELEV_DOWN]:     { arrow: '⬇', kind: 'down', flipTo: ELEV_UP,
+                     flipMsg: '⬆ Flipped! Elevator now goes UP — set to 1' },
+  [ELEV_SIDE]:     { arrow: '➡', kind: 'side', flipTo: ELEV_SIDE_REV,
+                     flipMsg: '⬅ Flipped! Side elevator now glides BACKWARD — set to 1' },
+  [ELEV_SIDE_REV]: { arrow: '⬅', kind: 'side', flipTo: ELEV_SIDE,
+                     flipMsg: '➡ Flipped! Side elevator now glides FORWARD — set to 1' },
+};
 
 const MINE_ARM_DELAY = 5;    // seconds from arming strike to a live sensor
 const MINE_DEFUSE = 2;       // seconds from trip to boom
@@ -79,12 +92,18 @@ export class Gear {
       this._strikeMine(x, y, z, block, pos);
       return true;
     }
-    if (isElevUp(block) || isElevSide(block)) {
-      const up = isElevUp(block);
-      const count = (elevCount(block) % ELEV_MAX) + 1;   // past 10 wraps to 1
-      this.world.setBlock(x, y, z, (up ? ELEV_UP : ELEV_SIDE) + count - 1);
+    const count = elevCount(block);
+    if (count > 0) {
+      const info = ELEV_INFO[block - (count - 1)];
       audio.playIgnite(pos);
-      this.msg(`${up ? '⬆' : '➡'} Elevator set to ${count}`);
+      if (count < ELEV_MAX) {
+        this.world.setBlock(x, y, z, block + 1);
+        this.msg(`${info.arrow} Elevator set to ${count + 1}`);
+      } else {
+        // The 11th strike flips the direction and restarts the count at 1.
+        this.world.setBlock(x, y, z, info.flipTo);
+        this.msg(info.flipMsg);
+      }
       return true;
     }
     return false;
@@ -222,7 +241,7 @@ export class Gear {
     const bx = Math.floor(p.pos.x), bz = Math.floor(p.pos.z);
     const by = Math.floor(p.pos.y - 0.05);
     const b = this.world.getBlock(bx, by, bz);
-    if (!isElevUp(b) && !isElevSide(b)) { this._standT = 0; this._standKey = null; return; }
+    if (elevCount(b) === 0) { this._standT = 0; this._standKey = null; return; }
     const k = key(bx, by, bz);
     if (this.elevators.has(k)) return;
     if (this._standKey !== k) { this._standKey = k; this._standT = 0; }
@@ -234,20 +253,28 @@ export class Gear {
   }
 
   _launch(x, y, z, block) {
-    const up = isElevUp(block);
     const count = elevCount(block);
+    const base = block - (count - 1);
+    const kind = ELEV_INFO[base].kind;
     let max = 0;
     let dir = { x: 0, z: 0 };
-    if (up) {
+    if (kind === 'up') {
       for (let i = 1; i <= count; i++) {
         if (isSolid(this.world.getBlock(x, y + i, z))) break;
         max = i;
       }
+    } else if (kind === 'down') {
+      for (let i = 1; i <= count; i++) {
+        if (y - i < 0 || isSolid(this.world.getBlock(x, y - i, z))) break;
+        max = i;
+      }
     } else {
-      // Sideways elevators travel the way the rider is facing (cardinal).
+      // Sideways elevators travel the way the rider is facing (cardinal) —
+      // or the exact opposite for the reversed variant.
       const fx = -Math.sin(this.player.yaw), fz = -Math.cos(this.player.yaw);
       dir = Math.abs(fx) > Math.abs(fz)
         ? { x: Math.sign(fx) || 1, z: 0 } : { x: 0, z: Math.sign(fz) || 1 };
+      if (base === ELEV_SIDE_REV) { dir.x = -dir.x; dir.z = -dir.z; }
       for (let i = 1; i <= count; i++) {
         const cx = x + dir.x * i, cz = z + dir.z * i;
         // Needs room for the block and the rider standing on it.
@@ -265,7 +292,7 @@ export class Gear {
     mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
     this.world.scene.add(mesh);
     this.elevators.set(key(x, y, z), {
-      kind: up ? 'up' : 'side', id: block, dir, max,
+      kind, id: block, dir, max,
       ox: x, oy: y, oz: z, x, y, z,
       progress: 0, offT: 0, state: 'out', mesh,
     });
@@ -283,36 +310,62 @@ export class Gear {
                      p.pos.y > top - 0.35 && p.pos.y < top + 0.45 &&
                      p.vel.y <= 0.01;
       if (riding) e.offT = 0; else e.offT += dt;
+      if (e.offT > RIDE_GRACE && e.state !== 'return') e.state = 'return';
 
+      // Where does it want to be next frame?
       const step = ELEV_SPEED * dt;
-      let dx = 0, dz = 0;
+      let tx = e.x, ty = e.y, tz = e.z, tp = e.progress, arrived = false;
       if (e.state === 'out') {
         if (e.kind === 'up') {
-          e.y = Math.min(e.y + step, e.oy + e.max);
-          if (e.y >= e.oy + e.max) e.state = 'hold';
+          ty = Math.min(e.y + step, e.oy + e.max);
+          arrived = ty >= e.oy + e.max;
+        } else if (e.kind === 'down') {
+          ty = Math.max(e.y - step, e.oy - e.max);
+          arrived = ty <= e.oy - e.max;
         } else {
-          const t = Math.min(e.progress + step, e.max);
-          dx = e.dir.x * (t - e.progress);
-          dz = e.dir.z * (t - e.progress);
-          e.x += dx; e.z += dz; e.progress = t;
-          if (t >= e.max) e.state = 'hold';
+          tp = Math.min(e.progress + step, e.max);
+          tx = e.ox + e.dir.x * tp;
+          tz = e.oz + e.dir.z * tp;
+          arrived = tp >= e.max;
         }
-        if (e.offT > RIDE_GRACE) e.state = 'return';   // rider bailed mid-trip
-      } else if (e.state === 'hold') {
-        if (e.offT > RIDE_GRACE) e.state = 'return';
-      } else {                                          // heading home
+      } else if (e.state === 'return') {
         if (e.kind === 'up') {
           const landY = this._landY(e);
-          e.y = Math.max(e.y - step, landY);
-          if (e.y <= landY) { this._settle(k, e, e.ox, landY, e.oz); continue; }
+          ty = Math.max(e.y - step, landY);
+          arrived = ty <= landY;
+        } else if (e.kind === 'down') {
+          const homeY = this._riseHomeY(e);
+          ty = Math.min(e.y + step, homeY);
+          arrived = ty >= homeY;
         } else {
-          const t = Math.max(e.progress - step, 0);
-          dx = e.dir.x * (t - e.progress);
-          dz = e.dir.z * (t - e.progress);
-          e.x += dx; e.z += dz; e.progress = t;
-          if (t <= 0) { this._settle(k, e, e.ox, e.oy, e.oz); continue; }
+          tp = Math.max(e.progress - step, 0);
+          tx = e.ox + e.dir.x * tp;
+          tz = e.oz + e.dir.z * tp;
+          arrived = tp <= 0;
         }
       }
+
+      // Garage-door safety sensor: never move into (or land on) a player —
+      // hover right where we are and wait for them to step aside. Riders
+      // standing on top don't count as "in the way".
+      const moving = tx !== e.x || ty !== e.y || tz !== e.z;
+      if (moving && this._playerInBox(tx, ty, tz, e.y)) {
+        e.mesh.position.set(e.x + 0.5, e.y + 0.5, e.z + 0.5);
+        if (riding) { p.pos.y = e.y + 1; p.vel.y = 0; p.onGround = true; }
+        continue;                                    // paused; retry next frame
+      }
+      const dx = tx - e.x, dz = tz - e.z;
+      e.x = tx; e.y = ty; e.z = tz; e.progress = tp;
+
+      if (arrived) {
+        if (e.state === 'return') {
+          if (this._settle(k, e, Math.round(e.x), Math.round(e.y), Math.round(e.z))) continue;
+          // Landing spot is occupied by a player — keep hovering, retry.
+        } else {
+          e.state = 'hold';
+        }
+      }
+
       e.mesh.position.set(e.x + 0.5, e.y + 0.5, e.z + 0.5);
       if (riding) {                                     // carry the rider along
         p.pos.x += dx;
@@ -324,20 +377,52 @@ export class Gear {
     }
   }
 
-  // Where a returning vertical platform rests: the first level at or below it
-  // with solid ground underneath (terrain may have changed while it flew).
+  // Would a platform occupying cell (bx,by,bz) intersect a player's body?
+  // Someone standing on top is a rider, not an obstacle — judged against the
+  // platform's CURRENT top (topY + 1), not the candidate cell, so one frame of
+  // travel can never reclassify a rider as blocking (the margin must not
+  // depend on frame rate).
+  _playerInBox(bx, by, bz, topY = by) {
+    const test = (px, py, pz) => {
+      if (py > topY + 0.65) return false;              // on top: riding
+      return px > bx - 0.35 && px < bx + 1.35 &&
+             pz > bz - 0.35 && pz < bz + 1.35 &&
+             py + 1.8 > by && py < by + 1;
+    };
+    const p = this.player.pos;
+    if (test(p.x, p.y, p.z)) return true;
+    for (const r of this.remotes.players.values()) {
+      if (test(r.cur.x, r.cur.y, r.cur.z)) return true;
+    }
+    return false;
+  }
+
+  // Where a returning up-elevator rests: the first level at or below it with
+  // solid ground underneath (terrain may have changed while it flew).
   _landY(e) {
     let y = Math.floor(e.y + 0.001);
     while (y > 0 && !isSolid(this.world.getBlock(e.ox, y - 1, e.oz))) y--;
     return y;
   }
 
+  // Where a returning down-elevator rests: back home at its origin, or just
+  // below the first block that now caps the shaft above it.
+  _riseHomeY(e) {
+    for (let c = Math.floor(e.y) + 1; c <= e.oy; c++) {
+      if (isSolid(this.world.getBlock(e.ox, c, e.oz))) return c - 1;
+    }
+    return e.oy;
+  }
+
+  // Turn the platform back into a world block. Returns false (and leaves it
+  // hovering) if a player occupies the spot — the block must never entomb one.
   _settle(k, e, cx, cy, cz) {
-    this.world.scene.remove(e.mesh);
-    this.elevators.delete(k);
     // If someone built into the landing cell while it flew, rest on top instead.
     let ty = cy;
     while (ty < cy + 5 && isSolid(this.world.getBlock(cx, ty, cz))) ty++;
+    if (this._playerInBox(cx, ty, cz)) return false;
+    this.world.scene.remove(e.mesh);
+    this.elevators.delete(k);
     if (cx === e.ox && ty === e.oy && cz === e.oz) {
       this.world.setBlock(cx, ty, cz, e.id, false);    // never moved, server-side
     } else {
@@ -345,5 +430,6 @@ export class Gear {
       this.world.setBlock(e.ox, e.oy, e.oz, AIR, true);
     }
     audio.playPlace({ x: cx + 0.5, y: ty + 0.5, z: cz + 0.5 });
+    return true;
   }
 }

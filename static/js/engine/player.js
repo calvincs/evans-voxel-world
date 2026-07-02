@@ -218,6 +218,7 @@ export class Player {
       else { this._syncCamera(); return; }
     }
     dt = Math.min(dt, 0.05); // clamp big hitches so we never tunnel
+    this._unstick();
     if (this.hurtCd > 0) this.hurtCd -= dt;
 
     // Regenerate health after staying out of danger long enough.
@@ -323,6 +324,25 @@ export class Player {
 
   shake(amount) {
     this.shakeTime = Math.max(this.shakeTime, amount);
+  }
+
+  // If a block materialized inside us (a friend's remote edit, or their
+  // elevator settling where they thought we weren't), pop out to the nearest
+  // open spot instead of being frozen in place forever. Straight up first —
+  // "the block slipped under your feet" — then the four sides.
+  _unstick() {
+    if (!this.collides()) return;
+    const { x, y, z } = this.pos;
+    const spots = [
+      [x, Math.floor(y) + 1, z], [x, Math.floor(y) + 2, z],
+      [Math.floor(x) + 1.5, y, z], [Math.floor(x) - 0.5, y, z],
+      [x, y, Math.floor(z) + 1.5], [x, y, Math.floor(z) - 0.5],
+    ];
+    for (const [sx, sy, sz] of spots) {
+      this.pos.set(sx, sy, sz);
+      if (!this.collides()) { this.vel.set(0, 0, 0); return; }
+    }
+    this.pos.set(x, y, z);   // fully boxed in — try again next frame
   }
 
   _syncCamera(dt = 0) {
