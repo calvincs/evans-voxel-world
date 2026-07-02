@@ -58,16 +58,23 @@ COOKIE = "evans_session"
 SESSION_TTL = 30 * 24 * 3600
 GUEST_USERNAME = "guest"
 
-# One generator per seed (deterministic, cheap to keep around).
-_generators: dict[int, worldgen.WorldGenerator] = {}
+# One generator per (seed, village) pair — deterministic, cheap to keep around.
+# Worlds created before villages existed carry no flag and keep their exact
+# original terrain; new worlds generate with a village stamped in.
+_generators: dict[tuple, worldgen.WorldGenerator] = {}
 
 
-def gen_for(seed: int) -> worldgen.WorldGenerator:
-    g = _generators.get(seed)
+def gen_for(seed: int, village: bool = False) -> worldgen.WorldGenerator:
+    key = (seed, bool(village))
+    g = _generators.get(key)
     if g is None:
-        g = worldgen.WorldGenerator(seed=seed)
-        _generators[seed] = g
+        g = worldgen.WorldGenerator(seed=seed, village=bool(village))
+        _generators[key] = g
     return g
+
+
+def gen_for_world(w: dict) -> worldgen.WorldGenerator:
+    return gen_for(w["seed"], w.get("village", False))
 
 
 app = FastAPI(title="EvansGame")
@@ -376,26 +383,29 @@ async def revert_world(wid: str, body: Revert, request: Request):
 
 
 # --- Per-world play ----------------------------------------------------------
-_spawns: dict[int, dict] = {}          # seed -> spawn point (deterministic)
+_spawns: dict[tuple, dict] = {}    # (seed, village) -> spawn point (deterministic)
 
 
-def _spawn_for(seed: int) -> dict:
+def _spawn_for(w: dict) -> dict:
     """Spawn on dry land near the origin. An unlucky seed puts (0,0) under the
-    ocean, which strands a brand-new player on the seabed."""
-    spawn = _spawns.get(seed)
+    ocean, which strands a brand-new player on the seabed. Uses the effective
+    surface (village levelling and rooftops included) so nobody spawns inside
+    a building."""
+    key = (w["seed"], bool(w.get("village", False)))
+    spawn = _spawns.get(key)
     if spawn is None:
-        gen = gen_for(seed)
+        gen = gen_for_world(w)
         x = z = 0
-        h = gen.height_at(0, 0)
+        h = gen.surface_at(0, 0)
         if h <= worldgen.WATER_LEVEL:
             for r in range(4, 129, 4):           # spiral outward in 8 directions
                 cands = [(r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, r), (r, -r), (-r, -r)]
-                dry = next(((cx, cz, gen.height_at(cx, cz)) for cx, cz in cands
-                            if gen.height_at(cx, cz) > worldgen.WATER_LEVEL), None)
+                dry = next(((cx, cz, gen.surface_at(cx, cz)) for cx, cz in cands
+                            if gen.surface_at(cx, cz) > worldgen.WATER_LEVEL), None)
                 if dry:
                     x, z, h = dry
                     break
-        spawn = _spawns[seed] = {"x": x + 0.5, "y": h + 3, "z": z + 0.5}
+        spawn = _spawns[key] = {"x": x + 0.5, "y": h + 3, "z": z + 0.5}
     return spawn
 
 
@@ -416,7 +426,12 @@ def world_config(wid: str, request: Request):
         "chunkZ": worldgen.CHUNK_Z,
         "worldY": worldgen.WORLD_Y,
         "waterLevel": worldgen.WATER_LEVEL,
-        "spawn": _spawn_for(w["seed"]),
+        "spawn": _spawn_for(w),
+        # Where the village is (or null) — the client spawns villagers there.
+        "village": gen_for_world(w).village_info(),
+        # Armed-mine ownership {"x,y,z": playerName}: sensors never fire on a
+        # mine's owner, and this survives reloads and adoption by other clients.
+        "mines": w.get("mines", {}),
         "player": w.get("player"),
         # Server wall clock: clients derive the day/night phase from this so
         # everyone in a world shares the same night (and the same spiders).
@@ -427,7 +442,7 @@ def world_config(wid: str, request: Request):
 @app.get("/api/worlds/{wid}/chunk/{cx}/{cz}")
 def world_chunk(wid: str, cx: int, cz: int, request: Request):
     _, w = access_or_error(request, wid)
-    blocks = gen_for(w["seed"]).generate_chunk(cx, cz)
+    blocks = gen_for_world(w).generate_chunk(cx, cz)
     edits = store.edits_in_chunk(
         wid, cx, cz, worldgen.CHUNK_X, worldgen.CHUNK_Z, worldgen.WORLD_Y)
     for (lx, y, lz), block in edits.items():
@@ -449,10 +464,10 @@ def world_edit(wid: str, edit: Edit, request: Request):
 
 @app.post("/api/worlds/{wid}/edits")
 def world_edits(wid: str, payload: Edits, request: Request):
-    access_or_error(request, wid)
+    u, _ = access_or_error(request, wid)
     items = [(e.x, e.y, e.z, e.block) for e in payload.edits[:MAX_EDIT_BATCH]
              if _valid_edit(e.x, e.y, e.z, e.block)]
-    store.set_blocks(wid, items)
+    store.set_blocks(wid, items, u["name"])
     return {"ok": True, "count": len(items)}
 
 
@@ -563,9 +578,14 @@ async def world_ws(ws: WebSocket, wid: str):
             elif t == "edit":
                 x, y, z, block = (msg.get(k) for k in ("x", "y", "z", "block"))
                 if _valid_edit(x, y, z, block) and wid not in _reverting:
-                    await asyncio.to_thread(store.set_block, wid, x, y, z, block)
-                    await _broadcast(room, ws, {"type": "edit", "x": x, "y": y,
-                                                "z": z, "block": block})
+                    await asyncio.to_thread(store.set_block, wid, x, y, z, block,
+                                            user["name"])
+                    out = {"type": "edit", "x": x, "y": y, "z": z, "block": block}
+                    # Arming a mine stamps the owner so every client's sensor
+                    # knows who it must never fire on.
+                    if block in store.PROX_ARMED:
+                        out["owner"] = user["name"]
+                    await _broadcast(room, ws, out)
             elif t == "edits":
                 raw = msg.get("edits")
                 items = []
@@ -574,7 +594,7 @@ async def world_ws(ws: WebSocket, wid: str):
                                                            e.get("z"), e.get("block")):
                         items.append((e["x"], e["y"], e["z"], e["block"]))
                 if items and wid not in _reverting:
-                    await asyncio.to_thread(store.set_blocks, wid, items)
+                    await asyncio.to_thread(store.set_blocks, wid, items, user["name"])
                     await _broadcast(room, ws, {"type": "edits", "edits": [
                         {"x": x, "y": y, "z": z, "block": b} for (x, y, z, b) in items]})
             elif t == "fx":

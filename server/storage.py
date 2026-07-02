@@ -155,6 +155,7 @@ class WorldStore:
         except (json.JSONDecodeError, OSError):
             return None
         world.setdefault("edits", {})
+        world.setdefault("mines", {})
         world.setdefault("player", None)
         # Ownership fields — legacy worlds predate accounts, so they become
         # public + unclaimed (owner=None); any logged-in user can claim one.
@@ -231,6 +232,7 @@ class WorldStore:
             "id": self._new_id(),
             "name": name,
             "seed": random.randrange(1, 2 ** 31),   # fresh terrain per world
+            "village": True,   # worlds born after villages existed get one
             "created": _now(),
             "lastPlayed": _now(),
             "owner": owner,
@@ -396,25 +398,43 @@ class WorldStore:
     def key(x: int, y: int, z: int) -> str:
         return f"{x},{y},{z}"
 
-    def set_block(self, wid: str, x: int, y: int, z: int, block: int):
+    # Armed proximity-mine block ids (must match static/js/blocks.js). The
+    # server keeps a per-world {"x,y,z": ownerName} map so a mine can always
+    # recognise — and never fire on — the player who armed it, no matter which
+    # client ends up running its sensor.
+    PROX_ARMED = (26, 27)
+
+    def _track_mine(self, w, x, y, z, block, owner):
+        k = self.key(x, y, z)
+        mines = w.setdefault("mines", {})
+        if block in self.PROX_ARMED:
+            if owner:
+                mines[k] = owner
+        else:
+            mines.pop(k, None)
+
+    def set_block(self, wid: str, x: int, y: int, z: int, block: int,
+                  owner: str | None = None):
         w = self._load(wid)
         if not w:
             return
         with _LOCK:
             w["edits"][self.key(x, y, z)] = block
+            self._track_mine(w, x, y, z, block, owner)
             w["lastPlayed"] = _now()
             self._rev[wid] = self._rev.get(wid, 0) + 1
             self._index_put(wid, x, y, z, block)
             self._mark_dirty(w)
         self.maybe_snapshot(wid)
 
-    def set_blocks(self, wid: str, items):
+    def set_blocks(self, wid: str, items, owner: str | None = None):
         w = self._load(wid)
         if not w:
             return
         with _LOCK:
             for x, y, z, block in items:
                 w["edits"][self.key(x, y, z)] = block
+                self._track_mine(w, x, y, z, block, owner)
                 self._index_put(wid, x, y, z, block)
             w["lastPlayed"] = _now()
             self._rev[wid] = self._rev.get(wid, 0) + 1

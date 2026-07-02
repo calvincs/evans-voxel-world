@@ -34,16 +34,25 @@ TEST_JS = r"""
 
   mobs.spawnTimer = 1e9;
 
-  // T1: live mine + creature stepping close -> boom with no delay.
+  // Mines carve only half a TNT's crater (radius ~1.7 vs 3.4) but keep the
+  // full TNT lethal radius (4.5) for creatures. Chain geometry (T2/T3) keys
+  // off the crater radius, so mine-triggered explosives sit adjacent.
+
+  // T1: live mine + creature stepping close -> boom with no delay; the crater
+  // is mine-sized (a stone 3 away survives) while the kill radius is
+  // TNT-sized (a bystander pig 3.5 away dies; a far pig at ~7 does not).
   {
     const x0 = P.x + 20, z0 = P.z;
     slab(x0, z0, 12, 5);
     const mx = x0 + 4, mz = z0 + 2;
     S(mx, PY + 1, mz, PROX_OFF);
+    S(mx + 3, PY + 1, mz, STONE);                    // outside the half crater
     gear.strike(mx, PY + 1, mz, PROX_OFF);          // arm for OTHERS
     mobs.clear();
-    const pig = mobs.spawnAt('pig', mx + 6.5, PY + 1, mz + 0.5);  // out of range
-    pig.walking = false; pig.timer = 1e9;            // stand still
+    const park = (x, z) => { const p = mobs.spawnAt('pig', x, PY + 1, z); p.walking = false; p.timer = 1e9; return p; };
+    const pig = park(mx + 6.5, mz + 0.5);            // will walk in and trip it
+    const bystander = park(mx - 3.5, mz + 0.5);      // inside kill, outside sensor
+    const farPig = park(mx + 6.5, mz + 2.5);         // outside the kill radius
     step(Math.ceil(5.2 / dt));                       // arming period passes
     const liveStill = world.getBlock(mx, PY + 1, mz) === PROX_OFF + 1; // PROX_OTHERS, unblown
     pig.pos.set(mx + 1.5, PY + 1, mz + 0.5);         // step into sensor range
@@ -52,14 +61,18 @@ TEST_JS = r"""
       liveStill,
       blewInTwoFrames: world.getBlock(mx, PY + 1, mz) === AIR,
       pigCaught: pig.hp <= 0,
+      bystanderKilled: bystander.hp <= 0,            // full lethal radius
+      farPigSafe: farPig.hp > 0,                     // ...but still bounded
+      smallCrater: world.getBlock(mx + 3, PY + 1, mz) === STONE,
     };
   }
 
-  // T2: TNT explosion sets off an (unarmed) mine 3 blocks away.
+  // T2: TNT explosion sets off an (unarmed) mine 3 blocks away; the witness
+  // sits 1 from the mine (inside its half blast) but 4 from the TNT (outside).
   {
     const x0 = P.x + 20, z0 = P.z + 12;
     slab(x0, z0, 12, 5);
-    const tx = x0 + 2, mx = tx + 3, wx = tx + 6, tz = z0 + 2;   // witness 6 from TNT, 3 from mine
+    const tx = x0 + 2, mx = tx + 3, wx = tx + 4, tz = z0 + 2;
     S(tx, PY + 1, tz, TNT);
     S(mx, PY + 1, tz, PROX_OFF);
     S(wx, PY + 1, tz, STONE);
@@ -72,25 +85,55 @@ TEST_JS = r"""
     };
   }
 
-  // T3: tripped mine sets off TNT 3 blocks away. (Kept close to the player —
-  // a corner further out crosses the mob DESPAWN radius and eats the pig.)
+  // T3: tripped mine sets off TNT next door (its half blast only reaches
+  // ~1.7); the witness sits 3 from the TNT (inside its full blast) but 4 from
+  // the mine. (Kept close to the player — a corner further out crosses the
+  // mob DESPAWN radius and eats the pig.)
   {
     const x0 = P.x + 20, z0 = P.z - 12;
     slab(x0, z0, 12, 5);
-    const mx = x0 + 2, tx = mx + 3, wx = mx + 6, mz = z0 + 2;   // witness 6 from mine, 3 from TNT
+    const mx = x0 + 2, tx = mx + 1, wx = mx + 4, mz = z0 + 2;
     S(mx, PY + 1, mz, PROX_OFF);
     S(tx, PY + 1, mz, TNT);
     S(wx, PY + 1, mz, STONE);
     gear.strike(mx, PY + 1, mz, PROX_OFF);
     mobs.clear();                                    // arm with nothing nearby
     step(Math.ceil(5.2 / dt));
-    const pig = mobs.spawnAt('pig', mx + 1.5, PY + 1, mz + 0.5); // step onto the sensor
+    const pig = mobs.spawnAt('pig', mx - 0.5, PY + 1, mz + 0.5); // step onto the sensor
     pig.walking = false; pig.timer = 1e9;
     step(Math.ceil(1.5 / dt));
     results.mineTriggersTnt = {
       mineGone: world.getBlock(mx, PY + 1, mz) === AIR,
       tntGone: world.getBlock(tx, PY + 1, mz) === AIR,
       witnessGone: world.getBlock(wx, PY + 1, mz) === AIR,   // only the TNT's own blast reaches it
+    };
+  }
+
+  // T4: reload case — an armed mine block whose sensor was wiped (page
+  // reload) gets adopted by the nearby client, re-arms, and still blows for
+  // a creature. Must sit within adoption range of the REAL player (16
+  // blocks, +/-10 vertically), unlike the other arenas.
+  {
+    const py = Math.floor(G.player.pos.y), PY2 = py + 6;
+    const mx = P.x + 10, mz = P.z;
+    for (let x = mx - 2; x <= mx + 2; x++)
+      for (let z = mz - 2; z <= mz + 2; z++) {
+        S(x, PY2, z, STONE);
+        for (let dy = 1; dy <= 3; dy++) S(x, PY2 + dy, z, AIR);
+      }
+    S(mx, PY2 + 1, mz, PROX_OFF);
+    gear.strike(mx, PY2 + 1, mz, PROX_OFF);
+    for (const k of [...gear.mines.keys()]) gear._dropMine(k);   // "reload"
+    const orphaned = gear.mines.size === 0;
+    mobs.clear();
+    step(Math.ceil(6.5 / dt));            // adoption scan + full re-arm
+    const adopted = [...gear.mines.values()].some((m) => m.state === 'live');
+    const pig = mobs.spawnAt('pig', mx + 1.5, PY2 + 1, mz + 0.5);
+    pig.walking = false; pig.timer = 1e9;
+    step(3);
+    results.orphanAdoption = {
+      orphaned, adopted,
+      blown: world.getBlock(mx, PY2 + 1, mz) === AIR,
     };
   }
 
@@ -149,6 +192,7 @@ def main():
     print(json.dumps(results, indent=2))
     ok = all(all(v.values()) for v in results.values())
     print("RESULT:", "ALL PASS" if ok else "SOME FAILED")
+    # scenarios: instantTrip, tntTriggersMine, mineTriggersTnt, orphanAdoption
     sys.exit(0 if ok else 2)
 
 

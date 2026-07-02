@@ -431,21 +431,29 @@ export class World {
     const b = this.getBlock(x, y, z);
     if (b !== TNT && !isProx(b)) return;
     this.fuseKeys.add(k);
+    // Mines are anti-creature, not anti-landscape: they carve only half a
+    // TNT's crater, but their lethal blast (below) stays full size.
+    const bscale = isProx(b) ? 0.5 : 1;
     const mesh = new THREE.Mesh(this._primeGeo, this._primeMat);
     mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
     this.scene.add(mesh);
-    this.fuses.push({ x, y, z, key: k, t: fuse, mesh });
+    this.fuses.push({ x, y, z, key: k, t: fuse, bscale, mesh });
     audio.playIgnite({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
     if (this.net && this.net.connected) this.net.sendFx('ignite', x, y, z);
   }
 
-  _explode(x, y, z) {
+  // `bscale` shrinks only the crater (block destruction) relative to a full
+  // TNT blast — mines detonate at 0.5. Damage, shake, sound, and debris are
+  // always full strength, and reach through walls: proximity is pure
+  // distance, no line of sight.
+  _explode(x, y, z, bscale = 1) {
     audio.playExplosion({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
     if (this.onExplosion) this.onExplosion(x, y, z);
     this._spawnParticles(x, y, z);
     if (this.net && this.net.connected) this.net.sendFx('explode', x, y, z);
 
-    const R = Math.ceil(BLAST_RADIUS), R2 = BLAST_RADIUS * BLAST_RADIUS;
+    const radius = BLAST_RADIUS * bscale;
+    const R = Math.ceil(radius), R2 = radius * radius;
     const removed = [];
     for (let dx = -R; dx <= R; dx++)
       for (let dy = -R; dy <= R; dy++)
@@ -527,7 +535,7 @@ export class World {
         this.scene.remove(f.mesh);
         this.fuseKeys.delete(f.key);
         this.fuses.splice(i, 1);
-        this._explode(f.x, f.y, f.z);
+        this._explode(f.x, f.y, f.z, f.bscale);
       }
     }
     // Debris particles: ballistic, fading.

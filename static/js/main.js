@@ -468,7 +468,7 @@ async function startGame(worldId, demo) {
     if (d < 16) player.shake(0.9 * (1 - d / 16));
   };
   // Caught in a blast: lose health, scaled by how close you were (up to 8 at
-  // point-blank, nothing past ~6 blocks). The long fuse gives you time to flee.
+  // point-blank, nothing past ~6 blocks). Pure distance — walls don't shield.
   const BLAST_HURT_R = 6;
   const blastHurt = (x, y, z) => {
     const d = Math.hypot(player.pos.x - (x + 0.5), (player.pos.y + 0.9) - (y + 0.5), player.pos.z - (z + 0.5));
@@ -479,7 +479,8 @@ async function startGame(worldId, demo) {
   };
   const blastFelt = (x, y, z) => { feltShake(x, y, z); blastHurt(x, y, z); };
   // Any local explosion (TNT or mine): shake + hurt the player, and creatures
-  // caught in the blast die outright. (mobs is defined just below.)
+  // caught in the blast die outright — mines at the same full lethal radius
+  // as TNT, even though their crater is half-sized. (mobs is defined below.)
   world.onExplosion = (x, y, z) => { blastFelt(x, y, z); mobs.blastKill(x, y, z); };
 
   if (isTouch) setupTouchControls(player);
@@ -492,6 +493,7 @@ async function startGame(worldId, demo) {
 
   const mobs = new Mobs(scene, world, assets.textures);   // wandering animals (+ optional skins)
   mobs.peaceful = !!cfg.peaceful;                         // world toggle: friendly animals only
+  mobs.village = cfg.village || null;                     // where villagers live
   player.mobs = mobs;                                     // let a swing hit creatures
 
   // Health HUD + damage feedback + death.
@@ -539,6 +541,8 @@ async function startGame(worldId, demo) {
   // Contraption blocks: jack-o'-lanterns, proximity mines, elevators. The
   // Firestone routes strikes here first; TNT stays with player/world.
   const gear = new Gear(world, player, mobs, remotes, atlas.image, (m) => toast(m, 2500));
+  gear.myName = currentUser ? currentUser.name : '';      // mines spare their owner
+  gear.setOwners(cfg.mines);                              // ...across reloads too
   player.onStrike = (x, y, z, b) => gear.strike(x, y, z, b);
   const myName = currentUser ? currentUser.name : 'Player';
   const roster = new Map();       // id -> { name }
@@ -577,8 +581,12 @@ async function startGame(worldId, demo) {
         world.setBlock(m.x, m.y, m.z, m.block, false);
         audio.playPlace(pos);
       }
+      gear.noteEdit(m.x, m.y, m.z, m.block, m.owner);    // track mine ownership
     },
-    onEdits: (edits) => edits.forEach((e) => world.setBlock(e.x, e.y, e.z, e.block, false)),
+    onEdits: (edits) => edits.forEach((e) => {
+      world.setBlock(e.x, e.y, e.z, e.block, false);
+      gear.noteEdit(e.x, e.y, e.z, e.block);             // craters retire mines
+    }),
     onFx: (m) => {
       if (m.kind === 'explode') {
         audio.playExplosion({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
