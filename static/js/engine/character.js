@@ -66,7 +66,11 @@ export class Character {
   }
 
   setLabel(text) {
-    if (this.label) { this.group.remove(this.label); this.label.material.map.dispose(); }
+    if (this.label) {
+      this.group.remove(this.label);
+      this.label.material.map.dispose();
+      this.label.material.dispose();     // the SpriteMaterial leaks otherwise
+    }
     const cv = document.createElement('canvas');
     cv.width = 256; cv.height = 64;
     const ctx = cv.getContext('2d');

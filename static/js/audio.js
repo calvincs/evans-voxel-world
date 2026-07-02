@@ -131,6 +131,7 @@ export function resume() {
   )).then(() => { if (soundOn) startMusic(); });
 
   if (soundOn) startMusic();   // start generative music immediately
+  startAmbience();             // birds / crickets / wind (routes under the mute)
 }
 
 export function isSoundOn() { return soundOn; }
@@ -379,6 +380,88 @@ export function playStep(pos) {
   src.start(t0); src.stop(t0 + 0.1);
 }
 
+// --- Ambient soundscape -------------------------------------------------------
+// A living background: soft wind always, birdsong by day, crickets at night.
+// Everything hangs off sfxGain, so the master mute silences it too. The game
+// loop feeds in the daylight level each frame (setAmbientDaylight).
+let ambTimer = null, ambGain = null, windGain = null;
+let ambDaylight = 1;
+
+export function setAmbientDaylight(d) { ambDaylight = d; }
+
+function startAmbience() {
+  if (ambTimer || !ctx) return;
+  ambGain = ctx.createGain(); ambGain.gain.value = 0.5; ambGain.connect(sfxGain);
+  const src = noiseSource(); src.loop = true;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 220; lp.Q.value = 0.4;
+  windGain = ctx.createGain(); windGain.gain.value = 0;
+  src.connect(lp); lp.connect(windGain); windGain.connect(ambGain);
+  src.start();
+  ambTimer = setInterval(ambTick, 300);
+}
+
+function ambTick() {
+  if (!ctx || ctx.state !== 'running') return;
+  const t0 = ctx.currentTime;
+  const night = 1 - ambDaylight;
+  // Wind: barely-there by day, a touch stronger at night, slowly wandering.
+  windGain.gain.setTargetAtTime(0.05 + night * 0.06 + Math.random() * 0.02, t0, 1.2);
+  if (ambDaylight > 0.6 && Math.random() < 0.10) birdChirp(t0);
+  if (night > 0.6 && Math.random() < 0.5) cricketChirp(t0);
+}
+
+function birdChirp(t0) {
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = Math.random() * 1.6 - 0.8;
+  pan.connect(ambGain);
+  const base = 2200 + Math.random() * 1200;
+  const n = 2 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < n; i++) {
+    const t = t0 + i * (0.09 + Math.random() * 0.05);
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(base * (1 + Math.random() * 0.2), t);
+    o.frequency.exponentialRampToValueAtTime(base * (0.8 + Math.random() * 0.15), t + 0.07);
+    const g = env(t, 0.05 + Math.random() * 0.03, 0.09, 0.01);
+    o.connect(g); g.connect(pan);
+    o.start(t); o.stop(t + 0.12);
+  }
+}
+
+function cricketChirp(t0) {
+  const pan = ctx.createStereoPanner();
+  pan.pan.value = Math.random() * 1.6 - 0.8;
+  pan.connect(ambGain);
+  const f = 4100 + Math.random() * 500;
+  for (let i = 0; i < 3; i++) {         // the classic three-pulse chirp
+    const t = t0 + i * 0.07;
+    const o = ctx.createOscillator();
+    o.type = 'triangle'; o.frequency.value = f;
+    const g = env(t, 0.022, 0.05, 0.008);
+    o.connect(g); g.connect(pan);
+    o.start(t); o.stop(t + 0.07);
+  }
+}
+
+// Gentle notification chimes: 'join' rises, 'leave' falls, 'dawn' is a little
+// three-note sunrise fanfare.
+export function playChime(kind) {
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const seq = kind === 'leave' ? [523.25, 392.0]
+    : kind === 'dawn' ? [392.0, 523.25, 659.25]
+      : [392.0, 523.25];
+  seq.forEach((f, i) => {
+    const t = t0 + i * 0.12;
+    const o = ctx.createOscillator();
+    o.type = 'sine'; o.frequency.value = f;
+    const g = env(t, 0.12, 0.5, 0.01);
+    o.connect(g); g.connect(sfxGain);
+    o.start(t); o.stop(t + 0.55);
+  });
+}
+
 // --- Background music -------------------------------------------------------
 // Either loop a provided music file, or generate a calm pentatonic piece with
 // a soft pad, a wandering melody and a gentle bass. Pentatonic + triads means
@@ -459,18 +542,24 @@ function tone(type, freq, t, dur, peak, attack, filterHz) {
 function emitStep(s, t) {
   const pos = s % 16;                       // 16 eighths = 2 bars
   const chord = CHORDS[Math.floor(s / 16) % CHORDS.length];
+  // The music follows the sun: at night it drops an octave, thins out, and
+  // darkens — calm and a little mysterious instead of chipper.
+  const night = ambDaylight < 0.35;
 
   if (pos === 0) {
     // Soft sustained pad on the chord (warm, slow attack).
-    for (const f of chord) tone('triangle', f * 2, t, 6.0, 0.10, 0.5, 900);
+    for (const f of chord) tone('triangle', f * 2, t, 6.0, night ? 0.08 : 0.10, 0.5, night ? 650 : 900);
     tone('sine', chord[0] / 2, t, 2.2, 0.18, 0.02);   // bass on the down-beat
   }
   if (pos === 8) tone('sine', chord[0] / 2, t, 2.0, 0.15, 0.02);
 
-  // Wandering melody, a little sparse so it breathes.
-  if (Math.random() < 0.55) {
+  // Wandering melody, a little sparse so it breathes — sparser after dark.
+  if (Math.random() < (night ? 0.4 : 0.55)) {
     melodyIdx += [-1, -1, 0, 1, 1, 2][Math.floor(Math.random() * 6)];
     melodyIdx = Math.max(0, Math.min(PENTA.length - 1, melodyIdx));
-    tone('triangle', PENTA[melodyIdx], t, 0.5, 0.16, 0.01, 2500);
+    const f = PENTA[melodyIdx] * (night ? 0.5 : 1);
+    tone('triangle', f, t, 0.5, 0.16, 0.01, 2500);
+    // A soft dotted-eighth echo gives the tune a little depth for free.
+    tone('triangle', f, t + EIGHTH * 1.5, 0.45, 0.055, 0.02, 1800);
   }
 }

@@ -34,6 +34,22 @@ const LAND_KEYS = TYPE_KEYS.filter((k) => !TYPES[k].aquatic && !TYPES[k].village
 const WATER_KEYS = TYPE_KEYS.filter((k) => TYPES[k].aquatic);
 const VILLAGER_KEYS = TYPE_KEYS.filter((k) => TYPES[k].villager);
 
+// What a poked villager says — a little personality per sort.
+const VILLAGER_LINES = {
+  farmer: ['🌾 "The pumpkins are coming along nicely!"',
+           '🌾 "A bit of rain would do the crops good."',
+           '🌾 "Mind the farm rows, please!"'],
+  smith:  ['⚒️ "Careful with that TNT around here, friend."',
+           '⚒️ "Fine stone in these hills. Fine stone."',
+           '⚒️ "Built anything good lately?"'],
+  elder:  ['👴 "When I was young, these hills were half as tall…"',
+           '👴 "Zzz… oh! Didn\'t see you there."',
+           '👴 "The wolves come out at night. Light the lanterns."'],
+  kid:    ['🧒 "Wanna race to the well?"',
+           '🧒 "I\'m not scared of wolves. Mostly."',
+           '🧒 "Watch me jump off the roof! …maybe later."'],
+};
+
 const GRAVITY = 24, TURN = 2.2;
 const TARGET_MOBS = 8;      // wild population kept alive around the player
 const SPAWN_MIN = 12, SPAWN_MAX = 26, DESPAWN = 42;
@@ -60,8 +76,16 @@ const CHASE_DROP = 3;       // blocks a hunter will hop down while chasing
 const CHASE_DROP_DEEP = 8;  // ...when the prey is below it (pits, stairwells)
 const PATH_INTERVAL = 0.6;  // min seconds between pathfinder calls per mob
 const PATH_NODES = 400;     // A* expansion budget per call
-const PATH_TTL = 2;         // seconds a computed path stays trusted
+const PATH_TTL = 5;         // seconds a computed path stays trusted. Walls are
+                            // static: expiring a path mid-doorway used to hand
+                            // control back to straight-line steering, which
+                            // drove the hunter into the wall again — a stable
+                            // oscillation right outside the opening.
+const WP_RADIUS = 0.55;     // how close counts as "arrived" at a waypoint
 const FLEE_TIME = 2.5;      // seconds a grazer bolts after taking a hit
+// One A* per rendered frame across ALL mobs: three wolves at a pit rim used to
+// re-path in the same frame and stutter the night's most exciting moment.
+let pathBudget = 1;
 
 // Optional AI-generated skins live at /static/textures/mob_<type>.png. When one
 // exists it's loaded once and shared by every mob of that type; otherwise the
@@ -83,12 +107,23 @@ export function loadMobSkins(available = []) {
   }
 }
 
+// Box geometries are identical for every mob of a type, so they're built once
+// and shared — hatching a pile of spawn eggs used to upload (and later
+// dispose) a fresh set of GPU buffers per creature. Never dispose these.
+const GEO_CACHE = new Map();
+function box(w, h, d) {
+  const k = `${w},${h},${d}`;
+  let g = GEO_CACHE.get(k);
+  if (!g) { g = new THREE.BoxGeometry(w, h, d); GEO_CACHE.set(k, g); }
+  return g;
+}
+
 // A limb/tentacle: a box hanging below a pivot group placed at the joint, so the
 // group can be rotated to swing it.
 function makeLimb(w, h, d, mat, x, pivotY, z) {
   const g = new THREE.Group();
   g.position.set(x, pivotY, z);
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  const m = new THREE.Mesh(box(w, h, d), mat);
   m.position.y = -h / 2;
   g.add(m);
   return g;
@@ -96,7 +131,7 @@ function makeLimb(w, h, d, mat, x, pivotY, z) {
 
 function addEyes(head, hd, spread, mat) {
   for (const sx of [-spread, spread]) {
-    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.02), mat);
+    const eye = new THREE.Mesh(box(0.06, 0.06, 0.02), mat);
     eye.position.set(sx, hd * 0.1, -hd / 2 - 0.005);
     head.add(eye);
   }
@@ -105,17 +140,17 @@ function addEyes(head, hd, spread, mat) {
 // --- body-plan builders: each adds meshes to `group` and returns the list of
 //     animated limbs (legs/tentacles), front-to-back where it matters. ---------
 function buildQuad(t, mats, group) {
-  const body = new THREE.Mesh(new THREE.BoxGeometry(t.w, t.bh, t.l), mats.body);
+  const body = new THREE.Mesh(box(t.w, t.bh, t.l), mats.body);
   body.position.y = t.legH + t.bh / 2;
   group.add(body);
 
-  const head = new THREE.Mesh(new THREE.BoxGeometry(t.hd, t.hd, t.hd), mats.head);
+  const head = new THREE.Mesh(box(t.hd, t.hd, t.hd), mats.head);
   head.position.set(0, t.legH + t.bh * 0.75, -t.l / 2 - t.hd * 0.3);
   addEyes(head, t.hd, 0.1, mats.eye);
   group.add(head);
 
   if (t.tail) {
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(t.legW, t.legW, t.hd * 0.8), mats.leg);
+    const tail = new THREE.Mesh(box(t.legW, t.legW, t.hd * 0.8), mats.leg);
     tail.position.set(0, t.legH + t.bh * 0.7, t.l / 2 + t.hd * 0.25);
     group.add(tail);
   }
@@ -132,17 +167,17 @@ function buildQuad(t, mats, group) {
 function buildChicken(t, mats, group) {
   const foot = new THREE.MeshLambertMaterial({ color: t.foot });
 
-  const body = new THREE.Mesh(new THREE.BoxGeometry(t.w, t.bh, t.l), mats.body);
+  const body = new THREE.Mesh(box(t.w, t.bh, t.l), mats.body);
   body.position.y = t.legH + t.bh / 2;
   group.add(body);
 
-  const head = new THREE.Mesh(new THREE.BoxGeometry(t.hd, t.hd, t.hd), mats.head);
+  const head = new THREE.Mesh(box(t.hd, t.hd, t.hd), mats.head);
   head.position.set(0, t.legH + t.bh + t.hd * 0.25, -t.l / 2 - t.hd * 0.05);
   addEyes(head, t.hd, 0.09, mats.eye);
-  const beak = new THREE.Mesh(new THREE.BoxGeometry(t.hd * 0.45, t.hd * 0.3, t.hd * 0.4), foot);
+  const beak = new THREE.Mesh(box(t.hd * 0.45, t.hd * 0.3, t.hd * 0.4), foot);
   beak.position.set(0, -t.hd * 0.1, -t.hd / 2 - t.hd * 0.1);
   head.add(beak);
-  const comb = new THREE.Mesh(new THREE.BoxGeometry(t.hd * 0.18, t.hd * 0.28, t.hd * 0.55),
+  const comb = new THREE.Mesh(box(t.hd * 0.18, t.hd * 0.28, t.hd * 0.55),
     new THREE.MeshLambertMaterial({ color: t.comb }));
   comb.position.set(0, t.hd * 0.55, 0.02);
   head.add(comb);
@@ -150,7 +185,7 @@ function buildChicken(t, mats, group) {
 
   // stubby wings flat against the sides
   for (const sx of [-1, 1]) {
-    const wing = new THREE.Mesh(new THREE.BoxGeometry(t.legW, t.bh * 0.8, t.l * 0.7), mats.body);
+    const wing = new THREE.Mesh(box(t.legW, t.bh * 0.8, t.l * 0.7), mats.body);
     wing.position.set(sx * (t.w / 2 + 0.005), t.legH + t.bh / 2, 0);
     group.add(wing);
   }
@@ -165,16 +200,16 @@ function buildChicken(t, mats, group) {
 
 function buildSpider(t, mats, group) {
   // Two body lumps: a round abdomen at the back, a smaller head at the front.
-  const abd = new THREE.Mesh(new THREE.BoxGeometry(t.w * 0.8, t.bh, t.l * 0.7), mats.body);
+  const abd = new THREE.Mesh(box(t.w * 0.8, t.bh, t.l * 0.7), mats.body);
   abd.position.set(0, t.legH, t.l * 0.22);
   group.add(abd);
-  const ceph = new THREE.Mesh(new THREE.BoxGeometry(t.w * 0.55, t.bh * 0.9, t.l * 0.5), mats.head);
+  const ceph = new THREE.Mesh(box(t.w * 0.55, t.bh * 0.9, t.l * 0.5), mats.head);
   ceph.position.set(0, t.legH, -t.l * 0.25);
   group.add(ceph);
   // a cluster of little red eyes on the front
   const eyeMat = new THREE.MeshBasicMaterial({ color: t.eye });
   for (const sx of [-0.09, -0.03, 0.03, 0.09]) {
-    const e = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.02), eyeMat);
+    const e = new THREE.Mesh(box(0.045, 0.045, 0.02), eyeMat);
     e.position.set(sx, t.legH + t.bh * 0.18, -t.l * 0.5);
     group.add(e);
   }
@@ -185,7 +220,7 @@ function buildSpider(t, mats, group) {
     for (let i = 0; i < 4; i++) {
       const g = new THREE.Group();
       g.position.set(sx * t.w * 0.4, t.legH + t.bh * 0.25, (-1.3 + i * 0.85) * (t.l * 0.26));
-      const seg = new THREE.Mesh(new THREE.BoxGeometry(t.legW, len, t.legW), mats.leg);
+      const seg = new THREE.Mesh(box(t.legW, len, t.legW), mats.leg);
       seg.position.set(sx * len * 0.34, -len * 0.34, 0);   // shift so it juts sideways+down
       seg.rotation.z = sx * 0.95;
       g.add(seg);
@@ -196,16 +231,16 @@ function buildSpider(t, mats, group) {
 }
 
 function buildSquid(t, mats, group) {
-  const mantle = new THREE.Mesh(new THREE.BoxGeometry(t.w, t.bh, t.l), mats.body);
+  const mantle = new THREE.Mesh(box(t.w, t.bh, t.l), mats.body);
   mantle.position.y = t.bh / 2;
   group.add(mantle);
-  const cap = new THREE.Mesh(new THREE.BoxGeometry(t.w * 0.66, t.bh * 0.4, t.l * 0.66), mats.body);
+  const cap = new THREE.Mesh(box(t.w * 0.66, t.bh * 0.4, t.l * 0.66), mats.body);
   cap.position.y = t.bh + t.bh * 0.14;
   group.add(cap);
   // big dark eyes on the sides
   const eyeMat = new THREE.MeshBasicMaterial({ color: 0x101018 });
   for (const sx of [-1, 1]) {
-    const e = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.13, 0.06), eyeMat);
+    const e = new THREE.Mesh(box(0.1, 0.13, 0.06), eyeMat);
     e.position.set(sx * (t.w / 2 + 0.005), t.bh * 0.55, -t.l * 0.18);
     group.add(e);
   }
@@ -229,7 +264,7 @@ function buildBiped(t, mats, group) {
     const g = makeLimb(t.legW, t.legH, t.legW, mats.leg, sx * t.w * 0.18, t.legH, 0);
     group.add(g); limbs.push(g);
   }
-  const body = new THREE.Mesh(new THREE.BoxGeometry(t.w, t.bh, t.l), mats.body);
+  const body = new THREE.Mesh(box(t.w, t.bh, t.l), mats.body);
   body.position.y = t.legH + t.bh / 2;
   group.add(body);
   for (const sx of [-1, 1]) {                                 // arms at the shoulders
@@ -237,16 +272,16 @@ function buildBiped(t, mats, group) {
       sx * (t.w / 2 + t.legW / 2 + 0.01), t.legH + t.bh - 0.02, 0);
     group.add(g); limbs.push(g);
   }
-  const head = new THREE.Mesh(new THREE.BoxGeometry(t.hd, t.hd, t.hd), mats.head);
+  const head = new THREE.Mesh(box(t.hd, t.hd, t.hd), mats.head);
   head.position.set(0, t.legH + t.bh + t.hd / 2, 0);
   addEyes(head, t.hd, 0.09, mats.eye);
   group.add(head);
   if (t.hat) {
     const hatMat = new THREE.MeshLambertMaterial({ color: t.hat });
-    const brim = new THREE.Mesh(new THREE.BoxGeometry(t.hd * 1.5, t.hd * 0.12, t.hd * 1.5), hatMat);
+    const brim = new THREE.Mesh(box(t.hd * 1.5, t.hd * 0.12, t.hd * 1.5), hatMat);
     brim.position.y = t.hd * 0.46;
     head.add(brim);
-    const crown = new THREE.Mesh(new THREE.BoxGeometry(t.hd * 0.85, t.hd * 0.3, t.hd * 0.85), hatMat);
+    const crown = new THREE.Mesh(box(t.hd * 0.85, t.hd * 0.3, t.hd * 0.85), hatMat);
     crown.position.y = t.hd * 0.64;
     head.add(crown);
   }
@@ -544,16 +579,20 @@ class Mob {
     }
 
     const px = this.pos.x, pz = this.pos.z;
-    if (this._stepMove(world, 'x', this.vel.x * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.x = 0; }
-    if (this._stepMove(world, 'z', this.vel.z * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.z = 0; }
+    let bumped = false;
+    if (this._stepMove(world, 'x', this.vel.x * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.x = 0; bumped = true; }
+    if (this._stepMove(world, 'z', this.vel.z * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.z = 0; bumped = true; }
     const hitY = this._moveAxis(world, 'y', this.vel.y * dt);
     if (hitY) { this.onGround = this.vel.y < 0; this.vel.y = 0; } else this.onGround = false;
 
     // No progress while hunting on foot (a wall, a corner, a too-deep rim)
     // charges the stuck timer — that's the pathfinder's cue in _steerChase.
+    // A wall bump counts even if the other axis still slides: gliding along a
+    // wall face past the doorway used to keep stuckT at zero forever, so the
+    // pathfinder never fired and the hunter orbited outside the opening.
     if (chasing && this.onGround) {
       const moved = Math.hypot(this.pos.x - px, this.pos.z - pz);
-      if (moved < this.t.speed * dt * 0.35) this.stuckT += dt;
+      if (bumped || moved < this.t.speed * dt * 0.35) this.stuckT += dt;
       else this.stuckT = Math.max(0, this.stuckT - dt * 2);
     }
 
@@ -566,7 +605,8 @@ class Mob {
   // until they're consumed or go stale.
   _steerChase(dt, world, player, dx, dz) {
     this.pathT -= dt;
-    if (this.stuckT > 0.35 && this.pathT <= 0 && this.onGround) {
+    if (this.stuckT > 0.35 && this.pathT <= 0 && this.onGround && pathBudget > 0) {
+      pathBudget--;
       this.pathT = PATH_INTERVAL;
       const drop = player.pos.y < this.pos.y - 1.5 ? CHASE_DROP_DEEP : CHASE_DROP;
       const p = findPath(world,
@@ -580,10 +620,17 @@ class Mob {
       while (this.path.length) {   // consume waypoints as we arrive on them
         const wp = this.path[0];
         if (Math.abs(wp.y - this.pos.y) < 1.2 &&
-            Math.hypot(wp.x + 0.5 - this.pos.x, wp.z + 0.5 - this.pos.z) < 0.4) this.path.shift();
+            Math.hypot(wp.x + 0.5 - this.pos.x, wp.z + 0.5 - this.pos.z) < WP_RADIUS) this.path.shift();
         else break;
       }
-      if (!this.path.length || this.pathAge > PATH_TTL) this.path = null;
+      if (!this.path.length) {
+        this.path = null;
+      } else if (this.pathAge > PATH_TTL) {
+        // Stale (the player has probably moved) — but don't fall back to
+        // straight-line blundering: ask for a fresh path right away.
+        this.path = null;
+        this.pathT = 0;
+      }
     }
     if (this.path) {
       const wp = this.path[0], wx = wp.x + 0.5 - this.pos.x, wz = wp.z + 0.5 - this.pos.z;
@@ -690,22 +737,25 @@ class Mob {
 
   dispose() {
     this.scene.remove(this.group);
-    this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    // Geometries are shared across all mobs (GEO_CACHE) — dispose materials only.
+    this.group.traverse((o) => { if (o.material) o.material.dispose(); });
   }
 }
 
 export class Mobs {
-  constructor(scene, world, textures = []) {
+  constructor(scene, world, textures = [], msg = () => {}) {
     this.scene = scene;
     this.world = world;
     this.mobs = [];
     this.spawnTimer = 2;
     this.peaceful = false;    // per-world toggle: hostiles neither spawn nor attack
     this.village = null;      // {x,z,radius} from the world config, when it has one
+    this.msg = msg;           // toast callback (villager chatter)
     loadMobSkins(textures);   // use any /static/textures/mob_<type>.png that exist
   }
 
   update(dt, player, daylight = 1) {
+    pathBudget = 1;           // one A* per frame, shared by every hunter
     const playerPos = player.pos;
     // In peaceful mode mobs never see the player, which disables chase + bite.
     const target = this.peaceful ? null : player;
@@ -739,7 +789,8 @@ export class Mobs {
 
   // The player swung: damage the nearest creature within reach and roughly in
   // front of the camera. Returns true if one was hit (so the block break is
-  // skipped in favour of the attack).
+  // skipped in favour of the attack). Villagers are neighbours, not targets —
+  // a swing at one just gets their attention (and a line of chatter).
   playerAttack(origin, dir) {
     let best = null, bestDist = Infinity;
     const c = new THREE.Vector3();
@@ -752,9 +803,21 @@ export class Mobs {
       if (dist < bestDist) { bestDist = dist; best = m; }
     }
     if (!best) return false;
+    if (best.t.villager) { this._villagerChat(best, origin); return true; }
     best.hurt(PLAYER_DMG, dir);                  // knocked back along the swing
     audio.playMobHit({ x: best.pos.x, y: best.pos.y + 0.4, z: best.pos.z });
     return true;
+  }
+
+  // A poked villager turns to face you and says something in character.
+  _villagerChat(m, origin) {
+    m.targetYaw = Math.atan2(origin.x - m.pos.x, origin.z - m.pos.z) + Math.PI;
+    m.walking = false;
+    m.timer = Math.max(m.timer, 1.5);            // pause to chat
+    if (m.chatCd && m.chatCd > performance.now()) return;
+    m.chatCd = performance.now() + 2500;
+    const lines = VILLAGER_LINES[m.type] || [];
+    if (lines.length) this.msg(lines[Math.floor(Math.random() * lines.length)]);
   }
 
   // An explosion at a block position: creatures caught in the blast die on the

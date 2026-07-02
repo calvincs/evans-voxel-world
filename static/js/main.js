@@ -532,7 +532,7 @@ async function startGame(worldId, demo) {
   buildHotbar(atlas.image, player);
   world.update(spawn.x, spawn.z);   // preload spawn chunks
 
-  const mobs = new Mobs(scene, world, assets.textures);   // wandering animals (+ optional skins)
+  const mobs = new Mobs(scene, world, assets.textures, (m) => toast(m, 3500));
   mobs.peaceful = !!cfg.peaceful;                         // world toggle: friendly animals only
   mobs.village = cfg.village || null;                     // where villagers live
   player.mobs = mobs;                                     // let a swing hit creatures
@@ -606,11 +606,17 @@ async function startGame(worldId, demo) {
       voice.rejoin();               // old pid's peer links are orphaned
       renderRoster();
     },
-    onJoin: (p) => { remotes.add(p); roster.set(p.id, { name: p.name }); renderRoster(); },
+    onJoin: (p) => {
+      remotes.add(p); roster.set(p.id, { name: p.name }); renderRoster();
+      toast(`👋 ${p.name} joined!`, 2500);
+      audio.playChime('join');
+    },
     onLeave: (id) => {
+      const name = (roster.get(id) || {}).name;
       remotes.remove(id); roster.delete(id); voiceIds.delete(id);
       voice.handle({ sub: 'leave', from: id });   // tear down their voice peer too
       renderRoster();
+      if (name) { toast(`${name} left.`, 2000); audio.playChime('leave'); }
     },
     onPos: (m) => remotes.setPos(m),
     onEdit: (m) => {
@@ -941,6 +947,23 @@ async function startGame(worldId, demo) {
 
   if (demo) { player.mobile = true; player.engage(); }
 
+  // "Night N survived" — a little dawn fanfare, not a progression system. Only
+  // counts a night the player actually lived through (>30s of dark), so
+  // joining at sunrise doesn't award one. Count is kept per world, locally.
+  let nightTime = 0;
+  const nightsKey = `evans-nights-${worldId}`;
+  const dawnCheck = (dt) => {
+    if (sky.daylight < 0.35) { nightTime += dt; return; }
+    if (nightTime > 30) {
+      let n = 0;
+      try { n = (parseInt(localStorage.getItem(nightsKey), 10) || 0) + 1; } catch (_) {}
+      try { localStorage.setItem(nightsKey, String(n)); } catch (_) {}
+      toast(`🌅 Night ${n} survived!`, 4000);
+      audio.playChime('dawn');
+    }
+    nightTime = 0;
+  };
+
   const clock = new THREE.Clock();
   let lastSel = -1;
   const coordsEl = $('coords');
@@ -955,6 +978,8 @@ async function startGame(worldId, demo) {
     player.update(dt);
     audio.setListener(player.pos.x, player.pos.y + 1.62, player.pos.z, player.yaw);
     sky.update(dt, player.pos);
+    audio.setAmbientDaylight(sky.daylight);   // birds by day, crickets at night
+    dawnCheck(dt);
     world.update(player.pos.x, player.pos.z, dt, sky.daylight);
     mobs.update(dt, player, sky.daylight);
     gear.update(dt);                  // mines + elevators (after player & mobs)

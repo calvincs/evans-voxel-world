@@ -119,6 +119,10 @@ TEST_JS = r"""
   {
     const pl = fake(X0 + 6.5, PY + 1, Z0 + 2.5);
     const w = mobs.spawnAt('wolf', X0 + 2.5, PY + 1, Z0 + 2.5);   // 4 away
+    // Deterministic start: face away (the drift direction). A random initial
+    // heading could walk the wolf INTO the player while it turned, tripping
+    // the legitimate crowded-snap defence and flaking the scenario.
+    w.yaw = w.targetYaw = Math.atan2(pl.pos.x - w.pos.x, pl.pos.z - w.pos.z);
     sim(pl, 3, 1);                                   // full daylight
     const dayAvoids = horiz(w, pl) > 5.5 && !w.chasing;
     w.pos.set(pl.pos.x + 1.8, PY + 1, pl.pos.z);     // crowd it by day
@@ -201,10 +205,21 @@ def main():
             if resp.get("id") == msg_id[0]:
                 return resp
 
-    # Wait for the game to boot (player unfreezes once spawn chunks load).
+    # Wait for the game to boot AND for every chunk under the test arenas to be
+    # loaded. Blocks set into a not-yet-streamed chunk are silently dropped, so
+    # building the platform too early leaves holes the fake player "stands" in —
+    # cells the pathfinder rightly refuses to route to (the historic first-run
+    # flake of the wall scenario).
     ready = False
     for _ in range(90):
-        r = evaluate("!!(window.game && window.game.world && !window.game.player.frozen)")
+        r = evaluate("""(() => {
+          const G = window.game;
+          if (!G || !G.world || G.player.frozen) return false;
+          const P = G.player.pos;
+          for (const [dx, dz] of [[-10, -4], [12, -4], [-10, 10], [12, 10], [0, 0]])
+            if (!G.world.ready(P.x + dx, P.z + dz)) return false;
+          return true;
+        })()""")
         if r.get("result", {}).get("result", {}).get("value") is True:
             ready = True
             break

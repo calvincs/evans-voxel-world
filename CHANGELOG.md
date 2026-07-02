@@ -4,6 +4,49 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — A world that sounds alive
+
+**Why:** the game had music and effect sounds but no *atmosphere* — and no
+gentle way of telling you things (a friend joining, the sun coming up).
+
+**What changed (`static/js/audio.js` + hooks in `main.js`):**
+- Ambient soundscape, fully synthesized: soft wind (a touch stronger after
+  dark), scattered birdsong by day, the classic three-pulse cricket chirp at
+  night — all panned randomly around you, all silenced by the master mute.
+- The generative music now follows the sun: after dark it drops an octave,
+  thins out and darkens — calm, a little mysterious. A soft dotted-eighth
+  echo voice gives the melody depth day and night.
+- Notification chimes: a rising two-note when a friend joins (with a "👋
+  Evan joined!" toast), falling when they leave, and a little three-note
+  sunrise fanfare.
+
+## 2026-07-02 — Villagers talk, dawn counts, hunters corner smarter
+
+**Why:** the only thing you could *do* with a villager was hit them. Nights
+passed without acknowledgement. And a long-standing bug: a hunting wolf could
+end up orbiting outside a doorway forever instead of walking through it.
+
+**What changed:**
+- Poking a villager no longer hurts them — they turn to face you and say
+  something in character ("🌾 The pumpkins are coming along nicely!", "🧒
+  Wanna race to the well?"). Four voices, three lines each (`mobs.js`).
+- At sunrise, if you actually lived through the night (30+ seconds of dark),
+  a toast counts it: "🌅 Night 12 survived!" with a tiny fanfare. A fun
+  counter, not a progression system — kept per world on the device.
+- Hunter pathfinding fixes: sliding along a wall now counts as "stuck" (the
+  cue that asks the pathfinder for a route), computed paths through static
+  walls stay trusted for 5s instead of 2, an expired path re-requests
+  immediately instead of blundering straight-line, and at most one A* runs
+  per frame across all mobs (night sieges no longer stutter).
+- Mob body-part geometries are now built once and shared by every creature of
+  a type — hatching a pile of spawn eggs used to upload and dispose a fresh
+  set of GPU buffers per animal (`mobs.js`); a small name-tag material leak
+  on player join/leave is also fixed (`engine/character.js`).
+- Test-harness fix: `test_mob_ai.py` now waits for every chunk under its
+  arenas to stream in before building them. Blocks placed into unloaded
+  chunks were silently dropped, which is what actually made the wall-doorway
+  scenario fail on the first run after a fresh boot.
+
 ## 2026-07-02 — Minimap
 
 **Why:** no way to find your way home (or find your sibling) in a big world.
