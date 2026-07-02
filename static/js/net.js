@@ -57,7 +57,9 @@ export class Net {
     const h = this.handlers;
     switch (m.type) {
       case 'welcome': this.myId = m.id; this.myColor = m.color;
-        h.onWelcome && h.onWelcome(m.id, m.players || []); break;
+        h.onWelcome && h.onWelcome(m.id, m.players || []);
+        if (m.simOwner != null && h.onMobSim) h.onMobSim(m.simOwner);
+        break;
       case 'join':    h.onJoin && h.onJoin(m); break;
       case 'leave':   h.onLeave && h.onLeave(m.id); break;
       case 'pos':     h.onPos && h.onPos(m); break;
@@ -66,6 +68,14 @@ export class Net {
       case 'fx':      h.onFx && h.onFx(m); break;
       case 'voice':   h.onVoice && h.onVoice(m); break;
       case 'reverted': h.onReverted && h.onReverted(); break;
+      // Creature sync: who simulates, the stream itself, and its events.
+      case 'mobsim':  h.onMobSim && h.onMobSim(m.owner); break;
+      case 'mobs':    h.onMobs && h.onMobs(m.m || []); break;
+      case 'mobhatch': h.onMobHatch && h.onMobHatch(m); break;
+      case 'mobgone': h.onMobGone && h.onMobGone(m.id); break;
+      case 'mobhit':  h.onMobHit && h.onMobHit(m); break;
+      case 'mobbite': h.onMobBite && h.onMobBite(m); break;
+      case 'peaceful': h.onPeaceful && h.onPeaceful(!!m.on); break;
     }
   }
 
@@ -81,6 +91,26 @@ export class Net {
   sendEdits(edits) { this._send({ type: 'edits', edits }); }
   // Ephemeral effect (e.g. an explosion) — relayed, never persisted.
   sendFx(kind, x, y, z) { this._send({ type: 'fx', kind, x, y, z }); }
+
+  // --- Creature sync (see mobs.js) ------------------------------------------
+  // The sim owner streams full snapshots ~10/sec…
+  sendMobs(list, nowMs) {
+    if (!this.connected || nowMs - (this._mobsT || 0) < 100) return;
+    this._mobsT = nowMs;
+    this._send({ type: 'mobs', m: list });
+  }
+  // …and checkpoints persistent creatures every few seconds.
+  sendMobPersist(creatures, nowMs) {
+    if (!this.connected || nowMs - (this._mpT || 0) < 5000) return;
+    this._mpT = nowMs;
+    this._send({ type: 'mobpersist', creatures });
+  }
+  sendHatch(t, x, y, z) { this._send({ type: 'mobhatch', t, x, y, z }); }
+  sendMobGone(id) { this._send({ type: 'mobgone', id }); }
+  sendMobHit(i, dmg, dx, dz) { this._send({ type: 'mobhit', i, dmg, dx, dz }); }
+  sendMobBite(to, amount, x, z, source) {
+    this._send({ type: 'mobbite', to, amount, x, z, source });
+  }
 
   // --- WebRTC voice signaling (relayed over the same socket) ---------------
   // `to` omitted = broadcast to the room; present = targeted to one peer.

@@ -166,6 +166,7 @@ class WorldStore:
             return self._recover(wid)    # parses, but isn't a world
         world.setdefault("edits", {})
         world.setdefault("mines", {})
+        world.setdefault("creatures", {})
         world.setdefault("player", None)
         # Ownership fields — legacy worlds predate accounts, so they become
         # public + unclaimed (owner=None); any logged-in user can claim one.
@@ -209,6 +210,7 @@ class WorldStore:
             "player": snap.get("player"),
             "edits": dict(snap.get("edits") or {}),
             "mines": dict(snap.get("mines") or {}),
+            "creatures": dict(snap.get("creatures") or {}),
         }
         self.cache[wid] = world          # same lock-free fill as a normal load
         self._index.pop(wid, None)
@@ -355,15 +357,20 @@ class WorldStore:
             self._write(w)
         return True
 
-    def apply_state(self, wid: str, edits: dict, player, mines: dict | None = None) -> bool:
-        """Replace a world's edits + player (+ mine ownership) wholesale (used by
-        revert)."""
+    def apply_state(self, wid: str, edits: dict, player, mines: dict | None = None,
+                    creatures: dict | None = None) -> bool:
+        """Replace a world's edits + player (+ mine ownership + placed creatures)
+        wholesale (used by revert)."""
         w = self._load(wid)
         if not w:
             return False
         with _LOCK:
             w["edits"] = dict(edits or {})
             w["player"] = player
+            if creatures is not None:
+                w["creatures"] = dict(creatures)
+            # A pre-creatures snapshot says nothing about them: keep the current
+            # ones rather than deleting the kid's placed wolves on a rewind.
             if mines is not None:
                 w["mines"] = dict(mines)
             else:
@@ -393,7 +400,8 @@ class WorldStore:
                                           "ownerName", "public", "peaceful")}
             meta["village"] = bool(w.get("village", False))
             return (rev, dict(w.get("edits") or {}), w.get("player"),
-                    dict(w.get("mines") or {}), meta)
+                    dict(w.get("mines") or {}), meta,
+                    dict(w.get("creatures") or {}))
 
     def maybe_snapshot(self, wid: str):
         """Capture a snapshot if enough time has passed since the last one. Cheap
@@ -407,9 +415,9 @@ class WorldStore:
             return
         state = self._snapshot_state(wid, w)
         if state:
-            rev, edits, player, mines, meta = state
+            rev, edits, player, mines, meta, creatures = state
             self.snapshots.capture(wid, edits, player, label="auto",
-                                   mines=mines, meta=meta)
+                                   mines=mines, meta=meta, creatures=creatures)
             self._snap_rev[wid] = rev
 
     def snapshot_now(self, wid: str, label: str = "") -> dict | None:
@@ -424,9 +432,9 @@ class WorldStore:
         state = self._snapshot_state(wid, w)
         if not state:
             return None
-        rev, edits, player, mines, meta = state
+        rev, edits, player, mines, meta, creatures = state
         snap = self.snapshots.capture(wid, edits, player, label=label,
-                                      mines=mines, meta=meta)
+                                      mines=mines, meta=meta, creatures=creatures)
         self._snap_rev[wid] = rev
         return snap
 
@@ -519,6 +527,36 @@ class WorldStore:
         with _LOCK:
             w["player"] = state
             w["lastPlayed"] = _now()
+            self._mark_dirty(w)
+
+    # --- placed creatures -------------------------------------------------------
+    # Egg-hatched creatures persist with the world: {cid: {t, x, y, z, hp}}.
+    # The room's sim owner checkpoints positions every few seconds; add/remove
+    # happen immediately on hatch/death. None of these mint snapshots or bump
+    # the edit revision — creatures ride along with whatever snapshot happens.
+    def add_creature(self, wid: str, cid: str, rec: dict) -> bool:
+        w = self._load(wid)
+        if not w:
+            return False
+        with _LOCK:
+            w.setdefault("creatures", {})[cid] = rec
+            self._mark_dirty(w)
+        return True
+
+    def remove_creature(self, wid: str, cid: str):
+        w = self._load(wid)
+        if not w:
+            return
+        with _LOCK:
+            if w.setdefault("creatures", {}).pop(cid, None) is not None:
+                self._mark_dirty(w)
+
+    def set_creatures(self, wid: str, creatures: dict):
+        w = self._load(wid)
+        if not w:
+            return
+        with _LOCK:
+            w["creatures"] = dict(creatures)
             self._mark_dirty(w)
 
     def edits_in_chunk(self, wid, cx, cz, chunk_x, chunk_z, world_y):

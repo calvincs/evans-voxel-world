@@ -479,7 +479,9 @@ export class Player {
     }
     if (isSpawnEgg(held)) {                    // hatch a creature, not a block
       const { x, y, z } = r.prev;
-      if (this.mobs && this.mobs.spawnFromEgg(SPAWN_EGGS[held], x, y, z)) audio.playPlace();
+      // hatchEgg goes through the server when online: everyone sees the new
+      // creature, and it persists with the world.
+      if (this.mobs && this.mobs.hatchEgg(SPAWN_EGGS[held], x, y, z)) audio.playPlace();
       return;
     }
     if (isTool(held)) return;                  // other tools don't place

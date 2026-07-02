@@ -4,6 +4,41 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Shared, persistent creatures
+
+**Why:** creatures were simulated per-browser — two kids in the same world
+were chased by different, mutually invisible wolves, and egg-hatched creatures
+evaporated 42 blocks away or on any reload.
+
+**What changed:**
+- **One shared world of creatures.** The first player in a world becomes its
+  "sim owner": their client runs all the creature AI and streams positions
+  ~10×/sec; everyone else renders that stream (same interpolation as remote
+  players). If the owner leaves, the server promotes the next player, who
+  takes over from exactly where the stream left off. Solo play is unchanged —
+  you're just the owner of a room of one.
+- **Placed creatures persist.** Hatching a spawn egg now goes through the
+  server: the creature gets a permanent id, is saved in the world file
+  (position checkpointed every few seconds), appears for every player, is
+  included in snapshots/rewind and corruption rebuilds, and never
+  distance-despawns. Kill it and it's gone for good. A room full of wolves is
+  still full of wolves tomorrow.
+- **Hostiles hunt the nearest player**, not just the simulating one, and wild
+  animals now spawn around (and despawn away from) *all* players. A bite on
+  another player is routed to their client; a swing by a non-owner is routed
+  to the owner (with instant local feedback). Explosions kill the same
+  creatures for everyone. The Peaceful toggle now applies live for the whole
+  room.
+- **The world doesn't freeze with its owner.** The simulation keeps ticking on
+  the death screen, and a background timer keeps it (and the stream) alive
+  when the owner's tab is hidden — discovered the hard way: Chrome pauses
+  rendering loops in background tabs.
+- New `tools/test_mob_sync.py` — a real two-player test (two pages in one
+  headless Chrome): same wolf in the same place on both screens, mirror-side
+  kills, owner handoff, and full leave/rejoin persistence. 10 checks, wired
+  into `tools/run_game_tests.sh` (self-launching tests got their own ports so
+  they can't collide with the shared suite instance).
+
 ## 2026-07-02 — Docs match reality
 
 - README/run.sh said the game runs at `http://localhost:8000`; it's

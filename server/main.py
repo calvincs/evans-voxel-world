@@ -363,12 +363,17 @@ def set_visibility(wid: str, body: Visibility, request: Request):
 
 
 @app.post("/api/worlds/{wid}/peaceful")
-def set_peaceful(wid: str, body: Peaceful, request: Request):
+async def set_peaceful(wid: str, body: Peaceful, request: Request):
     u = require_user(request)
     w = world_or_404(wid)
     if not _is_owner(w, u["uid"]):
         raise HTTPException(403, "only the owner can change this")
-    store.set_peaceful(wid, body.peaceful)
+    await asyncio.to_thread(store.set_peaceful, wid, body.peaceful)
+    # Everyone in the world shares the same rules, live — most importantly the
+    # sim owner, whose client is the one actually running the creatures.
+    room = _rooms.get(wid)
+    if room:
+        await _broadcast(room, None, {"type": "peaceful", "on": body.peaceful})
     return {"ok": True, "peaceful": body.peaceful}
 
 
@@ -403,7 +408,7 @@ async def revert_world(wid: str, body: Revert, request: Request):
         # Both store calls hit the disk; keep them off the event loop.
         await asyncio.to_thread(store.snapshot_now, wid, label="before rewind")  # so a rewind is undoable
         await asyncio.to_thread(store.apply_state, wid, snap["edits"], snap.get("player"),
-                                snap.get("mines"))
+                                snap.get("mines"), snap.get("creatures"))
         await _kick_room(wid)                               # boot everyone out
     finally:
         _reverting.discard(wid)
@@ -460,6 +465,9 @@ def world_config(wid: str, request: Request):
         # Armed-mine ownership {"x,y,z": playerName}: sensors never fire on a
         # mine's owner, and this survives reloads and adoption by other clients.
         "mines": w.get("mines", {}),
+        # Placed (egg-hatched) creatures {cid: {t, x, y, z, hp}} — the room's
+        # sim owner brings them to life; everyone sees the same ones.
+        "creatures": w.get("creatures", {}),
         "player": w.get("player"),
         # Server wall clock: clients derive the day/night phase from this so
         # everyone in a world shares the same night (and the same spiders).
@@ -519,6 +527,56 @@ def world_player(wid: str, state: PlayerState, request: Request):
 _rooms: dict[str, dict] = {}            # wid -> { websocket: state }
 _reverting: set[str] = set()            # worlds mid-rewind (reject joins briefly)
 _pid_counter = itertools.count(1)
+
+# --- Creature sync -------------------------------------------------------------
+# One client per room — the "sim owner", the first player in (rooms are insertion
+# -ordered dicts) — runs the creature AI and streams snapshots; everyone else
+# renders its stream, so all players see the same creatures in the same places.
+# Egg-hatched creatures also persist in the world file: hatch/death update it
+# immediately, and the owner checkpoints positions every few seconds.
+MOB_TYPES = {"pig", "sheep", "cow", "wolf", "chicken", "spider", "squid",
+             "farmer", "smith", "elder", "kid"}
+MAX_CREATURES = 64          # persisted per world
+MAX_SNAPSHOT = 96           # mobs per stream message
+MOB_PERSIST_MIN = 2.0       # seconds between accepted checkpoints per room
+# Creatures hatched moments ago, per world — re-added if an owner checkpoint
+# computed before the hatch would otherwise drop them.
+_recent_creatures: dict[str, dict[str, float]] = {}
+
+
+def _room_owner(room: dict) -> int | None:
+    for st in room.values():
+        return st["id"]
+    return None
+
+
+def _room_owner_ws(room: dict):
+    for ws in room.keys():
+        return ws
+    return None
+
+
+async def _announce_sim(room: dict):
+    owner = _room_owner(room)
+    if owner is not None:
+        await _broadcast(room, None, {"type": "mobsim", "owner": owner})
+
+
+def _valid_creature(rec) -> dict | None:
+    """Sanitize one client-supplied creature record; None if hopeless."""
+    if not isinstance(rec, dict) or rec.get("t") not in MOB_TYPES:
+        return None
+    coords = [rec.get(k) for k in ("x", "y", "z")]
+    if not all(_finite(v) for v in coords):
+        return None
+    x, y, z = (float(v) for v in coords)
+    if not (-MAX_COORD <= x <= MAX_COORD and -MAX_COORD <= z <= MAX_COORD
+            and 0 <= y <= worldgen.WORLD_Y):
+        return None
+    hp = rec.get("hp")
+    hp = int(hp) if isinstance(hp, (int, float)) and math.isfinite(hp) else 1
+    return {"t": rec["t"], "x": round(x, 2), "y": round(y, 2), "z": round(z, 2),
+            "hp": max(1, min(99, hp))}
 
 
 async def _send_safe(ws, msg: dict, timeout: float = 2.0):
@@ -580,16 +638,20 @@ async def world_ws(ws: WebSocket, wid: str):
     color = user.get("color", DEFAULT_COLORS[0])
     state = {"id": pid, "name": user["name"], "color": color, "pos": None}
 
-    # Tell the newcomer who's already here, then add them to the room.
+    # Tell the newcomer who's already here, then add them to the room. The sim
+    # owner is whoever was first in — the newcomer itself if the room was empty.
     existing = [{"id": s["id"], "name": s["name"], "color": s.get("color"), "pos": s["pos"]}
                 for s in room.values() if s["pos"] is not None]
-    await ws.send_json({"type": "welcome", "id": pid, "color": color, "players": existing})
+    await ws.send_json({"type": "welcome", "id": pid, "color": color, "players": existing,
+                        "simOwner": _room_owner(room) if room else pid})
     room[ws] = state
+    await _announce_sim(room)
 
     POS_KEYS = ("x", "y", "z", "yaw", "pitch")
     FX_KINDS = ("explode", "ignite")
     FX_WINDOW, FX_MAX = 10.0, 40       # per-client effect rate limit
     fx_t0, fx_n = 0.0, 0
+    mp_t0 = 0.0                        # last accepted creature checkpoint
 
     try:
         while True:
@@ -645,6 +707,98 @@ async def world_ws(ws: WebSocket, wid: str):
                     await _broadcast(room, ws, {
                         "type": "fx", "kind": msg["kind"],
                         "x": float(coords[0]), "y": float(coords[1]), "z": float(coords[2])})
+            elif t == "mobs":
+                # Creature stream — only the sim owner may drive it. Entries are
+                # rebuilt, never forwarded verbatim.
+                if _room_owner(room) == pid and isinstance(msg.get("m"), list):
+                    out = []
+                    for e in msg["m"][:MAX_SNAPSHOT]:
+                        if not isinstance(e, dict) or e.get("t") not in MOB_TYPES:
+                            continue
+                        i = e.get("i")
+                        if not isinstance(i, str) or not (0 < len(i) <= 24):
+                            continue
+                        if not all(_finite(e.get(k)) for k in ("x", "y", "z", "w")):
+                            continue
+                        out.append({"i": i, "t": e["t"],
+                                    "x": float(e["x"]), "y": float(e["y"]),
+                                    "z": float(e["z"]), "w": float(e["w"]),
+                                    "s": 1 if e.get("s") else 0,
+                                    "h": 1 if e.get("h") else 0})
+                    await _broadcast(room, ws, {"type": "mobs", "m": out})
+            elif t == "mobhatch":
+                # Any player may hatch an egg: persist it and tell everyone
+                # (the sim owner brings it to life; mirrors show it at once).
+                rec = _valid_creature(msg)
+                w2 = store.get(wid)
+                if rec and w2 is not None and len(w2.get("creatures", {})) < MAX_CREATURES:
+                    import secrets as _s
+                    cid = "c" + _s.token_hex(4)
+                    await asyncio.to_thread(store.add_creature, wid, cid, rec)
+                    _recent_creatures.setdefault(wid, {})[cid] = time.monotonic()
+                    await _broadcast(room, None, {"type": "mobhatch", "id": cid,
+                                                  "t": rec["t"], "x": rec["x"],
+                                                  "y": rec["y"], "z": rec["z"]})
+            elif t == "mobgone":
+                # A persistent creature died — the sim owner retires it.
+                cid = msg.get("id")
+                if (_room_owner(room) == pid and isinstance(cid, str)
+                        and cid.startswith("c") and len(cid) <= 24):
+                    await asyncio.to_thread(store.remove_creature, wid, cid)
+                    _recent_creatures.get(wid, {}).pop(cid, None)
+                    await _broadcast(room, ws, {"type": "mobgone", "id": cid})
+            elif t == "mobpersist":
+                # Owner's periodic position checkpoint for persistent creatures.
+                raw = msg.get("creatures")
+                now = time.monotonic()
+                if (_room_owner(room) == pid and isinstance(raw, dict)
+                        and len(raw) <= MAX_CREATURES and now - mp_t0 >= MOB_PERSIST_MIN):
+                    mp_t0 = now
+                    clean = {}
+                    for cid, rec in raw.items():
+                        if not (isinstance(cid, str) and cid.startswith("c") and len(cid) <= 24):
+                            continue
+                        v = _valid_creature(rec)
+                        if v:
+                            clean[cid] = v
+                    # A hatch can land between the owner computing a checkpoint
+                    # and it arriving — don't let the stale set drop newborns.
+                    recent = _recent_creatures.get(wid, {})
+                    for cid, ts in list(recent.items()):
+                        if now - ts > 15:
+                            recent.pop(cid, None)
+                        elif cid not in clean:
+                            cur = (store.get(wid) or {}).get("creatures", {}).get(cid)
+                            if cur:
+                                clean[cid] = cur
+                    await asyncio.to_thread(store.set_creatures, wid, clean)
+            elif t == "mobhit":
+                # A non-owner swung at a creature: deliver to the sim owner.
+                i, dmg = msg.get("i"), msg.get("dmg")
+                if (isinstance(i, str) and 0 < len(i) <= 24 and _finite(dmg)
+                        and _finite(msg.get("dx", 0)) and _finite(msg.get("dz", 0))):
+                    owner_ws = _room_owner_ws(room)
+                    if owner_ws is not None and owner_ws is not ws:
+                        await _send_safe(owner_ws, {
+                            "type": "mobhit", "i": i,
+                            "dmg": max(1, min(4, int(dmg))),
+                            "dx": max(-1.0, min(1.0, float(msg.get("dx", 0)))),
+                            "dz": max(-1.0, min(1.0, float(msg.get("dz", 0))))})
+            elif t == "mobbite":
+                # The owner's sim says a creature bit a remote player — route the
+                # damage to that player's client.
+                if (_room_owner(room) == pid and _finite(msg.get("amount"))
+                        and msg.get("source") in MOB_TYPES
+                        and _finite(msg.get("x")) and _finite(msg.get("z"))):
+                    target = msg.get("to")
+                    for w2, st in list(room.items()):
+                        if st["id"] == target:
+                            await _send_safe(w2, {
+                                "type": "mobbite",
+                                "amount": max(1, min(4, int(msg["amount"]))),
+                                "x": float(msg["x"]), "z": float(msg["z"]),
+                                "source": msg["source"]})
+                            break
             elif t == "voice":
                 # WebRTC signaling. Tag the sender; deliver to one peer if a
                 # target id is given, otherwise to the whole room.
@@ -662,8 +816,13 @@ async def world_ws(ws: WebSocket, wid: str):
     except Exception:
         log.exception("world_ws: unexpected error (player %s, world %s)", pid, wid)
     finally:
+        was_owner = _room_owner(room) == pid
         room.pop(ws, None)
         await _broadcast(room, None, {"type": "leave", "id": pid})
+        # If the sim owner left, promote the next player so the creatures keep
+        # living from exactly where the stream last put them.
+        if was_owner and room:
+            await _announce_sim(room)
         # Only tear the room down if it's still *this* room: after a revert
         # kick, a fresh room may already live under the same wid, and popping
         # that one would strand its players in an orphaned room.

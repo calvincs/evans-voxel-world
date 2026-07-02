@@ -61,7 +61,8 @@ class SnapshotStore:
 
     # --- capture / read -------------------------------------------------------
     def capture(self, wid: str, edits: dict, player, label: str = "",
-                mines: dict | None = None, meta: dict | None = None) -> dict:
+                mines: dict | None = None, meta: dict | None = None,
+                creatures: dict | None = None) -> dict:
         wdir = self._wdir(wid)
         os.makedirs(wdir, exist_ok=True)
         snap = {
@@ -73,6 +74,8 @@ class SnapshotStore:
             # Mine ownership travels with the state it belongs to, so a rewind
             # can't leave an armed mine that no longer knows its owner.
             "mines": dict(mines or {}),
+            # Placed (egg-hatched) creatures as of this moment.
+            "creatures": dict(creatures or {}),
             # Enough world metadata (seed above all) to rebuild the world file
             # from this snapshot alone if it's ever lost or corrupted.
             "world": dict(meta) if meta else None,

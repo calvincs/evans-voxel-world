@@ -429,11 +429,19 @@ class Mob {
     for (const m of this.flashMats) if (m.emissive) m.emissive.setHex(0x661111);
   }
 
-  // Deal damage to the player if in range and off cooldown.
-  _tryAttack(player, dist) {
-    if (dist <= ATTACK_RANGE && this.attackCd <= 0 &&
-        player && player.locked && !player.frozen && !player.dead) {
-      player.hurt(this.t.attack || 1, { from: this.pos, source: this.type });
+  // Bite the target if in range and off cooldown. A local player is hurt
+  // directly; a remote player's bite is routed to their own client by the sim
+  // owner (biteRemote -> Mobs.onBite -> server -> that player).
+  _tryAttack(tgt, dist) {
+    if (!tgt || dist > ATTACK_RANGE || this.attackCd > 0) return;
+    if (tgt.local) {
+      const p = tgt.local;
+      if (p.locked && !p.frozen && !p.dead) {
+        p.hurt(this.t.attack || 1, { from: this.pos, source: this.type });
+        this.attackCd = ATTACK_INTERVAL;
+      }
+    } else if (this.biteRemote) {
+      this.biteRemote(tgt.pid, this.t.attack || 1, this.pos, this.type);
       this.attackCd = ATTACK_INTERVAL;
     }
   }
@@ -484,10 +492,10 @@ class Mob {
     return world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) === WATER;
   }
 
-  update(dt, world, player, daylight = 1) {
+  update(dt, world, tgt, daylight = 1) {
     if (this.angerT > 0) this.angerT -= dt;
-    if (this.aquatic) this._swim(dt, world, player, daylight);
-    else this._walk(dt, world, player, daylight);
+    if (this.aquatic) this._swim(dt, world, tgt, daylight);
+    else this._walk(dt, world, tgt, daylight);
     this._animate(dt);
     if (this.attackCd > 0) this.attackCd -= dt;
     if (this.hurtFlash > 0) {
@@ -503,14 +511,14 @@ class Mob {
   // and pathfind around corners to reach you. Night hunters only do this
   // after dark (with long senses) or while angered — by day they shy away
   // from players and snap only when crowded. Grazers bolt for a bit when hit.
-  _walk(dt, world, player, daylight = 1) {
+  _walk(dt, world, tgt, daylight = 1) {
     this.timer -= dt;
     if (this.timer <= 0) this._chooseAction();
     if (this.fleeT > 0) this.fleeT -= dt;
 
     let chasing = false;
-    if (this.hostile && player) {
-      const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
+    if (this.hostile && tgt) {
+      const dx = tgt.pos.x - this.pos.x, dz = tgt.pos.z - this.pos.z;
       const dist = Math.hypot(dx, dz);
       const night = daylight < 0.35;
       const aggressive = !this.t.nightHunter || night || this.angerT > 0;
@@ -518,10 +526,10 @@ class Mob {
       if (dist < range) {
         chasing = true;
         this.walking = true;
-        this._steerChase(dt, world, player, dx, dz);
+        this._steerChase(dt, world, tgt, dx, dz);
         // Bite range is 3-D so a wolf on the rim of your pit can't nip you
         // through two blocks of floor.
-        this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
+        this._tryAttack(tgt, Math.hypot(dx, tgt.pos.y - this.pos.y, dz));
       } else if (!aggressive && dist < DAY_AVOID) {
         this.walking = true;                     // daylight: sidle away instead
         this.targetYaw = Math.atan2(dx, dz);
@@ -557,7 +565,7 @@ class Mob {
       const waterAhead = world.getBlock(ax, Math.floor(this.pos.y + 0.1), az) === WATER ||
                          world.getBlock(ax, Math.floor(this.pos.y - 0.4), az) === WATER;
       // A hunter walks off the edge when there's dry footing within reach.
-      const dropOk = chasing && !waterAhead && !groundAhead && this._dropAheadOk(world, ax, az, player);
+      const dropOk = chasing && !waterAhead && !groundAhead && this._dropAheadOk(world, ax, az, tgt);
       if ((waterAhead || !groundAhead) && !dropOk) {
         speed = 0;
         // A grazer turns away (and keeps sprinting if it's mid-flight); a
@@ -603,15 +611,15 @@ class Mob {
   // Direct pursuit with a fallback brain: aim straight at the player, and when
   // that stops closing distance, buy a path from A* and follow its waypoints
   // until they're consumed or go stale.
-  _steerChase(dt, world, player, dx, dz) {
+  _steerChase(dt, world, tgt, dx, dz) {
     this.pathT -= dt;
     if (this.stuckT > 0.35 && this.pathT <= 0 && this.onGround && pathBudget > 0) {
       pathBudget--;
       this.pathT = PATH_INTERVAL;
-      const drop = player.pos.y < this.pos.y - 1.5 ? CHASE_DROP_DEEP : CHASE_DROP;
+      const drop = tgt.pos.y < this.pos.y - 1.5 ? CHASE_DROP_DEEP : CHASE_DROP;
       const p = findPath(world,
         Math.floor(this.pos.x), Math.floor(this.pos.y + 0.01), Math.floor(this.pos.z),
-        Math.floor(player.pos.x), Math.floor(player.pos.y + 0.01), Math.floor(player.pos.z), drop);
+        Math.floor(tgt.pos.x), Math.floor(tgt.pos.y + 0.01), Math.floor(tgt.pos.z), drop);
       this.path = p.length ? p : null;
       this.pathAge = 0;
     }
@@ -636,14 +644,14 @@ class Mob {
       const wp = this.path[0], wx = wp.x + 0.5 - this.pos.x, wz = wp.z + 0.5 - this.pos.z;
       if (Math.hypot(wx, wz) > 0.05) this.targetYaw = Math.atan2(-wx, -wz);
     } else {
-      this.targetYaw = Math.atan2(-dx, -dz);   // face the player
+      this.targetYaw = Math.atan2(-dx, -dz);   // face the target
     }
   }
 
   // A hunter jumps down a hole when there's dry footing within reach — and it
   // reaches farther when its prey is somewhere below the rim.
-  _dropAheadOk(world, ax, az, player) {
-    const maxDrop = player && player.pos.y < this.pos.y - 1.5 ? CHASE_DROP_DEEP : CHASE_DROP;
+  _dropAheadOk(world, ax, az, tgt) {
+    const maxDrop = tgt && tgt.pos.y < this.pos.y - 1.5 ? CHASE_DROP_DEEP : CHASE_DROP;
     const y = Math.floor(this.pos.y);
     for (let m = 2; m <= maxDrop + 1; m++) {
       const b = world.getBlock(ax, y - m, az);
@@ -658,24 +666,24 @@ class Mob {
   // depth: it dives or rises toward the player instead of holding spawn depth.
   // Like the land hunters, squid only hunt at night (with long senses) or
   // when angered; by day they glide away from swimmers unless crowded.
-  _swim(dt, world, player, daylight = 1) {
+  _swim(dt, world, tgt, daylight = 1) {
     this.timer -= dt;
     if (this.timer <= 0) { this.targetYaw = this.yaw + (Math.random() - 0.5) * 3.0; this.timer = 1.5 + Math.random() * 2.5; }
 
-    // Home toward a nearby player (still confined to water) and bite if close.
+    // Home toward a nearby target (still confined to water) and bite if close.
     let dive = 0;
-    if (this.hostile && player) {
-      const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
+    if (this.hostile && tgt) {
+      const dx = tgt.pos.x - this.pos.x, dz = tgt.pos.z - this.pos.z;
       const dist = Math.hypot(dx, dz);
       const night = daylight < 0.35;
       const aggressive = !this.t.nightHunter || night || this.angerT > 0;
       const range = aggressive ? (night && this.t.nightHunter ? DETECT_NIGHT : DETECT) : DAY_DEFEND;
       if (dist < range) {
         this.targetYaw = Math.atan2(-dx, -dz);
-        // Close the depth gap between body centre and the player's chest.
-        const gap = (player.pos.y + 0.9) - (this.pos.y + this.t.bh * 0.5);
+        // Close the depth gap between body centre and the target's chest.
+        const gap = (tgt.pos.y + 0.9) - (this.pos.y + this.t.bh * 0.5);
         if (Math.abs(gap) > 0.35) dive = Math.max(-this.t.speed, Math.min(this.t.speed, gap));
-        this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
+        this._tryAttack(tgt, Math.hypot(dx, tgt.pos.y - this.pos.y, dz));
       } else if (!aggressive && dist < DAY_AVOID) {
         this.targetYaw = Math.atan2(dx, dz);     // daylight: glide away instead
       }
@@ -751,40 +759,183 @@ export class Mobs {
     this.peaceful = false;    // per-world toggle: hostiles neither spawn nor attack
     this.village = null;      // {x,z,radius} from the world config, when it has one
     this.msg = msg;           // toast callback (villager chatter)
+    // Creature sync. One client per world — the "sim owner" — runs all the AI
+    // and streams snapshots; everyone else mirrors its stream, so every player
+    // sees the same creatures in the same places. Solo play is just being the
+    // owner of a room of one.
+    this.role = 'owner';      // 'owner' simulates; 'mirror' renders the stream
+    this.net = null;          // set by main.js in multiplayer
+    this.remotes = null;      // other players: spawn anchors + hostile targets
+    this.peers = 0;           // players besides us (stream only when > 0)
+    this.onBite = null;       // (pid, amount, x, z, source) -> relay to victim
+    this._nid = 1;            // wild-creature id counter
     loadMobSkins(textures);   // use any /static/textures/mob_<type>.png that exist
   }
 
+  _wildId() {
+    return `w${(this._nid++).toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+  }
+
   update(dt, player, daylight = 1) {
+    if (this.role === 'mirror') { this._updateMirror(dt); return; }
     pathBudget = 1;           // one A* per frame, shared by every hunter
     const playerPos = player.pos;
-    // In peaceful mode mobs never see the player, which disables chase + bite.
-    const target = this.peaceful ? null : player;
+    // Everyone connected is an anchor (spawn placement, despawn distance) and
+    // — unless peaceful — a target: the sim owner hunts for the whole room.
+    const anchors = [playerPos];
+    const targets = this.peaceful ? [] : [{ pos: playerPos, local: player }];
+    if (this.remotes) {
+      for (const [pid, r] of this.remotes.players) {
+        anchors.push(r.cur);
+        if (!this.peaceful) targets.push({ pos: r.cur, pid });
+      }
+    }
+    this._biteRemote ||= (pid, amount, pos, type) =>
+      this.onBite && this.onBite(pid, amount, pos.x, pos.z, type);
     // Keep the world populated: top up toward the target counts, refilling
     // faster while we're short (e.g. just after something was killed or
     // wandered off). Villagers have their own quota, active while the player
-    // is in or near their village.
+    // is in or near their village. Placed (persistent) creatures never count
+    // toward the wild population.
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0) {
-      const vCount = this.mobs.reduce((n, m) => n + (m.t.villager ? 1 : 0), 0);
+      const vCount = this.mobs.reduce((n, m) => n + (m.t.villager && !m.cid ? 1 : 0), 0);
+      const pCount = this.mobs.reduce((n, m) => n + (m.cid ? 1 : 0), 0);
       const vShort = vCount < this._villagersWanted(playerPos);
-      const short = this.mobs.length - vCount < TARGET_MOBS;
+      const short = this.mobs.length - vCount - pCount < TARGET_MOBS;
       this.spawnTimer = (short || vShort) ? 0.8 + Math.random() * 1.2 : 2.5 + Math.random() * 3;
+      // Wild spawns anchor to a random player, so nobody's surroundings are
+      // empty just because the sim owner wandered elsewhere.
+      const anchor = anchors[Math.floor(Math.random() * anchors.length)];
       if (vShort) this._spawnVillager(playerPos);
-      else if (short) this._trySpawn(playerPos, daylight);
+      else if (short) this._trySpawn(anchor, daylight);
     }
     for (let i = this.mobs.length - 1; i >= 0; i--) {
       const m = this.mobs[i];
-      m.update(dt, this.world, target, daylight);
+      m.biteRemote = this._biteRemote;
+      // A placed creature whose ground isn't streamed in yet stands still
+      // rather than falling through terrain that doesn't exist here.
+      const frozen = m.cid && !this.world.ready(m.pos.x, m.pos.z);
+      if (!frozen) {
+        let tgt = null, tb = Infinity;
+        if (m.hostile) {
+          for (const c of targets) {
+            const d = Math.hypot(c.pos.x - m.pos.x, c.pos.z - m.pos.z);
+            if (d < tb) { tb = d; tgt = c; }
+          }
+        }
+        m.update(dt, this.world, tgt, daylight);
+      }
       if (m.hp <= 0) {   // killed — puff of its body colour, remove, and reseed
         this.world.spawnBreakBurst(m.pos.x, m.pos.y + 0.4, m.pos.z, m.t.body);
         audio.playMobDeath({ x: m.pos.x, y: m.pos.y + 0.4, z: m.pos.z });
         m.dispose(); this.mobs.splice(i, 1);
+        if (m.cid && this.net) this.net.sendMobGone(m.cid);   // retire for good
         // Wild creatures get replaced elsewhere; player-hatched ones don't.
         if (!m.noReseed) this._reseed(m.type, playerPos, daylight);
         continue;
       }
-      if (m.pos.distanceTo(playerPos) > DESPAWN || m.pos.y < -6) { m.dispose(); this.mobs.splice(i, 1); }
+      // Wild creatures despawn once far from EVERY player; placed ones never.
+      if (!m.cid) {
+        let near = Infinity;
+        for (const a of anchors) near = Math.min(near, m.pos.distanceTo(a));
+        if (near > DESPAWN || m.pos.y < -6) { m.dispose(); this.mobs.splice(i, 1); }
+      }
     }
+    this._netSync();
+  }
+
+  // Stream the room's creatures (~10 Hz, only with peers to hear it) and
+  // checkpoint persistent ones (~every 5 s). No-ops cleanly when offline.
+  _netSync() {
+    if (!this.net || !this.net.connected) return;
+    const now = performance.now();
+    if (this.peers > 0) {
+      this.net.sendMobs(this.mobs.map((m) => ({
+        i: m.nid, t: m.type,
+        x: +m.pos.x.toFixed(2), y: +m.pos.y.toFixed(2), z: +m.pos.z.toFixed(2),
+        w: +m.yaw.toFixed(2), s: m.moving ? 1 : 0, h: m.hurtFlash > 0 ? 1 : 0,
+      })), now);
+    }
+    const creatures = {};
+    let any = false;
+    for (const m of this.mobs) {
+      if (!m.cid) continue;
+      any = true;
+      creatures[m.cid] = { t: m.type, x: +m.pos.x.toFixed(2), y: +m.pos.y.toFixed(2),
+                           z: +m.pos.z.toFixed(2), hp: m.hp };
+    }
+    if (any) this.net.sendMobPersist(creatures, now);
+  }
+
+  // Mirror mode: no AI — every creature follows the sim owner's stream with
+  // the same interpolation remote players use.
+  _updateMirror(dt) {
+    const k = Math.min(1, dt * 10);
+    for (const m of this.mobs) {
+      if (m.mtgt) {
+        m.pos.lerp(m.mtgt, k);
+        let dy = (m.myaw ?? m.yaw) - m.yaw;
+        while (dy > Math.PI) dy -= 2 * Math.PI;
+        while (dy < -Math.PI) dy += 2 * Math.PI;
+        m.yaw += dy * k;
+        m.moving = !!m.ms;
+        m.curSpeed = m.ms ? m.t.speed : 0;
+      }
+      if (m.hurtFlash > 0) {
+        m.hurtFlash -= dt;
+        if (m.hurtFlash <= 0) {
+          for (const mat of m.flashMats) if (mat.emissive) mat.emissive.setHex(0x000000);
+        }
+      }
+      m._animate(dt);
+      m.group.position.copy(m.pos);
+      m.group.rotation.y = m.yaw;
+    }
+  }
+
+  // The sim owner's stream is the truth: create what's new, retarget what
+  // exists, drop whatever it no longer mentions.
+  applySnapshot(list) {
+    if (this.role !== 'mirror') return;
+    const seen = new Set();
+    for (const e of list) {
+      seen.add(e.i);
+      let m = this.mobs.find((x) => x.nid === e.i);
+      if (!m) {
+        if (!TYPES[e.t]) continue;
+        m = new Mob(this.scene, e.t, e.x, e.y, e.z);
+        m.nid = e.i;
+        if (e.i[0] === 'c') { m.cid = e.i; m.noReseed = true; }
+        m.mtgt = new THREE.Vector3(e.x, e.y, e.z);
+        this.mobs.push(m);
+      }
+      if (!m.mtgt) m.mtgt = new THREE.Vector3(e.x, e.y, e.z);
+      m.mtgt.set(e.x, e.y, e.z);
+      m.myaw = e.w;
+      m.ms = e.s;
+      if (e.h && m.hurtFlash <= 0) {
+        m.hurtFlash = 0.14;
+        for (const mat of m.flashMats) if (mat.emissive) mat.emissive.setHex(0x661111);
+      }
+    }
+    for (let i = this.mobs.length - 1; i >= 0; i--) {
+      if (!seen.has(this.mobs[i].nid)) {
+        this.mobs[i].dispose();
+        this.mobs.splice(i, 1);
+      }
+    }
+  }
+
+  // 'owner' simulates (solo play included); 'mirror' renders the stream.
+  // Becoming mirror discards local creatures (the stream is the truth now);
+  // becoming owner adopts the mirrored ones and simulates on from exactly
+  // where the stream left them.
+  setRole(role) {
+    if (role === this.role) return;
+    this.role = role;
+    if (role === 'mirror') this.clear();
+    else this.spawnTimer = 2;             // fresh owner: resume population upkeep
   }
 
   // The player swung: damage the nearest creature within reach and roughly in
@@ -804,9 +955,26 @@ export class Mobs {
     }
     if (!best) return false;
     if (best.t.villager) { this._villagerChat(best, origin); return true; }
+    if (this.role === 'mirror') {
+      // Instant local feedback; the sim owner applies the real damage.
+      audio.playMobHit({ x: best.pos.x, y: best.pos.y + 0.4, z: best.pos.z });
+      best.hurtFlash = 0.14;
+      for (const mat of best.flashMats) if (mat.emissive) mat.emissive.setHex(0x661111);
+      if (this.net) this.net.sendMobHit(best.nid, PLAYER_DMG, dir.x, dir.z);
+      return true;
+    }
     best.hurt(PLAYER_DMG, dir);                  // knocked back along the swing
     audio.playMobHit({ x: best.pos.x, y: best.pos.y + 0.4, z: best.pos.z });
     return true;
+  }
+
+  // A mirror player's swing, delivered to us (the sim owner) by the server.
+  applyRemoteHit(id, dmg, dx, dz) {
+    if (this.role === 'mirror') return;
+    const m = this.mobs.find((x) => x.nid === id);
+    if (!m || m.t.villager) return;
+    m.hurt(dmg, { x: dx, z: dz });
+    audio.playMobHit({ x: m.pos.x, y: m.pos.y + 0.4, z: m.pos.z });
   }
 
   // A poked villager turns to face you and says something in character.
@@ -821,8 +989,11 @@ export class Mobs {
   }
 
   // An explosion at a block position: creatures caught in the blast die on the
-  // spot (their removal + reseed happens in the next update pass).
+  // spot (their removal + reseed happens in the next update pass). Mirrors do
+  // nothing — the sim owner receives the same explosion (locally or as a
+  // relayed fx) and applies the authoritative kills.
   blastKill(x, y, z, r = 4.5) {
+    if (this.role === 'mirror') return;
     const c = new THREE.Vector3();
     for (const m of this.mobs) {
       m.center(c);
@@ -884,6 +1055,7 @@ export class Mobs {
       if (Math.hypot(spot.x - playerPos.x, spot.z - playerPos.z) < 5) return false;
       const kind = type || VILLAGER_KEYS[Math.floor(Math.random() * VILLAGER_KEYS.length)];
       const m = new Mob(this.scene, kind, spot.x, spot.y, spot.z);
+      m.nid = this._wildId();
       m.home = { x: v.x + 0.5, z: v.z + 0.5, r: v.radius };
       this.mobs.push(m);
       return true;
@@ -899,7 +1071,9 @@ export class Mobs {
     if (t.night && daylight >= 0.35) return false;     // nocturnal, and it's daytime
     const spot = t.aquatic ? this._findWaterSpot(playerPos) : this._findLandSpot(playerPos);
     if (!spot) return false;
-    this.mobs.push(new Mob(this.scene, type, spot.x, spot.y, spot.z));
+    const m = new Mob(this.scene, type, spot.x, spot.y, spot.z);
+    m.nid = this._wildId();
+    this.mobs.push(m);
     return true;
   }
 
@@ -925,6 +1099,7 @@ export class Mobs {
   // Spawn a specific animal at a spot (used for testing/screenshots).
   spawnAt(type, x, y, z) {
     const m = new Mob(this.scene, type, x, y, z);
+    m.nid = this._wildId();
     this.mobs.push(m);
     return m;
   }
@@ -938,6 +1113,7 @@ export class Mobs {
     const t = TYPES[type];
     if (!t || this.mobs.length >= MAX_MOBS) return false;
     const m = new Mob(this.scene, type, x + 0.5, y, z + 0.5);
+    m.nid = this._wildId();
     m.noReseed = true;
     if (t.villager && this.village) {
       m.home = { x: this.village.x + 0.5, z: this.village.z + 0.5, r: this.village.radius };
@@ -947,6 +1123,54 @@ export class Mobs {
       m.hurt(9999);            // a squid out of water doesn't last long
     }
     return true;
+  }
+
+  // Gameplay hatch (a spawn egg was used). Online it goes through the server,
+  // so it appears for everyone and persists with the world; offline it just
+  // spawns locally like before.
+  hatchEgg(type, x, y, z) {
+    if (!TYPES[type] || this.mobs.length >= MAX_MOBS) return false;
+    if (this.net && this.net.connected) {
+      this.net.sendHatch(type, x + 0.5, y, z + 0.5);
+      return true;             // instantiated when the server echoes mobhatch
+    }
+    return this.spawnFromEgg(type, x, y, z);
+  }
+
+  // Server echo of a hatch: bring it to life (owner) or show it (mirror).
+  hatchFromNet(cid, type, x, y, z) {
+    if (!TYPES[type] || this.mobs.find((m) => m.nid === cid)) return;
+    if (this.role === 'mirror') {
+      const m = new Mob(this.scene, type, x, y, z);
+      m.nid = cid; m.cid = cid; m.noReseed = true;
+      m.mtgt = new THREE.Vector3(x, y, z);
+      this.mobs.push(m);
+      return;
+    }
+    if (!this.spawnFromEgg(type, Math.floor(x), y, Math.floor(z))) return;
+    const m = this.mobs[this.mobs.length - 1];
+    m.nid = cid;
+    m.cid = cid;
+  }
+
+  // Owner-side load of the world's persistent creatures (from /config), so a
+  // room full of wolves is still full of wolves after everyone left.
+  loadPersistent(creatures) {
+    for (const [cid, c] of Object.entries(creatures || {})) {
+      if (!TYPES[c.t] || this.mobs.find((m) => m.nid === cid)) continue;
+      const m = new Mob(this.scene, c.t, c.x, c.y, c.z);
+      m.nid = cid; m.cid = cid; m.noReseed = true;
+      if (Number.isFinite(c.hp) && c.hp > 0) m.hp = c.hp;
+      if (m.t.villager && this.village) {
+        m.home = { x: this.village.x + 0.5, z: this.village.z + 0.5, r: this.village.radius };
+      }
+      this.mobs.push(m);
+    }
+  }
+
+  removeById(id) {
+    const i = this.mobs.findIndex((m) => m.nid === id);
+    if (i >= 0) { this.mobs[i].dispose(); this.mobs.splice(i, 1); }
   }
 
   clear() {

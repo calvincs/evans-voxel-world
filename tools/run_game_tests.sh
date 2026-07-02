@@ -43,6 +43,9 @@ done
 echo "=== tools/test_smoke.py (own instance) ==="
 .venv/bin/python tools/test_smoke.py || FAIL=1
 
+echo "=== tools/test_mob_sync.py (own instance, two players) ==="
+.venv/bin/python tools/test_mob_sync.py || FAIL=1
+
 echo
 [ $FAIL -eq 0 ] && echo "GAME TESTS: ALL PASS" || echo "GAME TESTS: FAILURES ABOVE"
 exit $FAIL

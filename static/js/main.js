@@ -535,6 +535,7 @@ async function startGame(worldId, demo) {
   const mobs = new Mobs(scene, world, assets.textures, (m) => toast(m, 3500));
   mobs.peaceful = !!cfg.peaceful;                         // world toggle: friendly animals only
   mobs.village = cfg.village || null;                     // where villagers live
+  mobs.loadPersistent(cfg.creatures);                     // placed creatures live here forever
   player.mobs = mobs;                                     // let a swing hit creatures
 
   // Health HUD + damage feedback + death.
@@ -647,6 +648,24 @@ async function startGame(worldId, demo) {
       }
     },
     onVoice: (m) => voice.handle(m),
+    // --- Creature sync -------------------------------------------------------
+    // The server names one client the "sim owner"; it runs the creatures and
+    // streams them, so every player sees the same animals in the same places.
+    onMobSim: (owner) => mobs.setRole(owner === net.myId ? 'owner' : 'mirror'),
+    onMobs: (list) => mobs.applySnapshot(list),
+    onMobHatch: (m) => mobs.hatchFromNet(m.id, m.t, m.x, m.y, m.z),
+    onMobGone: (id) => mobs.removeById(id),
+    onMobHit: (m) => mobs.applyRemoteHit(m.i, m.dmg, m.dx, m.dz),
+    onMobBite: (m) => {
+      if (!dead) player.hurt(m.amount, { from: { x: m.x, z: m.z }, source: m.source });
+    },
+    onPeaceful: (on) => {
+      if (mobs.peaceful !== on) {
+        mobs.peaceful = on;
+        toast(on ? '🕊️ Peaceful is ON — everyone is friendly now.'
+          : '⚔️ Peaceful is OFF — watch out at night!', 3000);
+      }
+    },
     onReverted: () => {
       // The owner rewound this world — freeze, tell the player, and return to
       // the menu with the restored state loaded fresh on reload.
@@ -658,6 +677,9 @@ async function startGame(worldId, demo) {
   });
   world.net = net;
   net.onDown = () => connectionCheckNow();   // socket dropped -> check the server now
+  mobs.net = net;
+  mobs.remotes = remotes;
+  mobs.onBite = (pid, amount, x, z, source) => net.sendMobBite(pid, amount, x, z, source);
 
   // Proximity voice chat (WebRTC). Peer audio is positioned by where that
   // player is, via remotes' interpolated positions.
@@ -684,6 +706,7 @@ async function startGame(worldId, demo) {
   }
 
   function renderRoster() {
+    mobs.peers = roster.size;    // the creature stream only runs with listeners
     const el = $('roster');
     el.innerHTML = '';
     rosterEls.clear();
@@ -969,9 +992,23 @@ async function startGame(worldId, demo) {
   const coordsEl = $('coords');
   const underwaterEl = $('underwater');
   let lastCoords = '';
+  let lastFrame = performance.now();
   function loop() {
     requestAnimationFrame(loop);
-    if (offline || dead) { renderer.render(scene, camera); return; }   // frozen while disconnected / dead
+    lastFrame = performance.now();
+    if (offline || dead) {
+      // Disconnected: fully frozen. Dead: the death screen is up but the world
+      // lives on — if we're the sim owner, the room's creatures must not
+      // freeze while we pick ourselves up.
+      if (!offline) {
+        const dt0 = Math.min(clock.getDelta(), 0.1);
+        sky.update(dt0, player.pos);
+        mobs.update(dt0, player, sky.daylight);
+        remotes.update(dt0);
+      }
+      renderer.render(scene, camera);
+      return;
+    }
     // Clamp dt: after a backgrounded tab getDelta() returns the whole absence
     // (minutes!), which would drive physics substeps for millions of iterations.
     const dt = Math.min(clock.getDelta(), 0.1);
@@ -1014,6 +1051,22 @@ async function startGame(worldId, demo) {
     renderer.render(scene, camera);
   }
   loop();
+
+  // rAF pauses in hidden tabs — but if this client is the sim owner, the whole
+  // room's creatures would freeze with it. A coarse background tick keeps the
+  // simulation (and its network stream) alive; browsers throttle hidden-tab
+  // timers to ~1 Hz, which is plenty to keep wolves biting. Rendering stays
+  // rAF-only.
+  setInterval(() => {
+    if (offline) return;
+    const now = performance.now();
+    if (now - lastFrame < 400) return;          // rAF is running normally
+    const dt = Math.min((now - lastFrame) / 1000, 0.5);
+    lastFrame = now;
+    sky.update(dt, player.pos);                 // wall-clock anchored; daylight stays true
+    mobs.update(dt, player, sky.daylight);
+    gear.update(dt);                            // mines keep watching too
+  }, 250);
 }
 
 // --- HUD ---------------------------------------------------------------------

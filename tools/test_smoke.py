@@ -26,8 +26,10 @@ import urllib.request
 import websocket  # websocket-client
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PORT = 8899
-DEBUG_PORT = 9223
+# Own ports: this test launches its own server + Chrome and must not collide
+# with the shared instance run_game_tests.sh keeps on 8899/9223.
+PORT = 8898
+DEBUG_PORT = 9225
 CHROME = next((p for p in ("/usr/bin/google-chrome", "/usr/bin/chromium-browser",
                            "/snap/bin/chromium") if os.path.exists(p)), None)
 

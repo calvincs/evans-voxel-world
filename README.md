@@ -134,11 +134,19 @@ present overrides the synthesized version. Free CC0 sources and details are in
 Friendly **pigs, sheep and cows** wander the grass near you (ambient — they
 don't fight or despawn your builds), and **wolves, spiders and squid** add a
 little night-time danger — the owner's 🕊️ **Peaceful** toggle (world menu or
-pause screen) turns it off instantly. Villagers wander their village; give one
-a poke and they'll say something. Survive a real night and dawn counts it for
-you ("🌅 Night 12 survived!"). Creatures are client-side for now, so each
-player sees their own; syncing them across multiplayer is a future step
-(`mobs.js`).
+pause screen) turns it off instantly, for everyone at once. Villagers wander
+their village; give one a poke and they'll say something. Survive a real night
+and dawn counts it for you ("🌅 Night 12 survived!").
+
+**Everyone sees the same creatures.** One player per world (the first one in —
+the "sim owner") runs the creature brains and streams them to the others, so a
+wolf chasing your brother is the same wolf on both screens; if the owner
+leaves, the next player takes over without a hiccup. Creatures hatched from
+**spawn eggs** also *persist*: fill a room with wolves, leave, come back — or
+have a friend join later — and the wolves are still there (they're saved with
+the world, included in snapshots/rewind, and they never wander-despawn like
+wild animals do). Hostiles hunt whichever player is nearest, not just the
+owner.
 
 A round **minimap** sits in the top-right corner — you're the white arrow at
 the centre, the orange ring is the village, and friends show as coloured dots.
