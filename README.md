@@ -147,14 +147,16 @@ The Firestone strikes more than TNT (see `static/js/gear.js`):
   it explodes like TNT. Creatures caught in the blast are gone on the spot;
   players get badly hurt. The yellow eye watches *other* players and animals;
   the red eye watches **you too**.
-- **Elevators** — the **⬆ Up Elevator** floats straight up when you stand on
-  it, and the **➡ Side Elevator** glides the way you're facing. Strikes set the
-  travel distance **1–10**, shown right on the block — and the **11th strike
-  flips the direction** (up ⬆ becomes down ⬇ for basement rides; forward ➡
-  becomes reverse ⬅) and restarts the count at 1. Hop off and the block comes
-  home and lands by itself. Returning platforms have a garage-door-style
-  **safety sensor**: one will never land on (or in!) a player — it hovers
-  overhead and waits for them to step aside.
+- **Elevators** — the **Up Elevator** (steel-blue) floats straight up when you
+  stand on it; the **Side Elevator** (tan) glides sideways. Strikes set the
+  travel distance **1–10**, shown right on the block, and the **11th strike
+  switches direction** and restarts at 1: vertical flips **⬆ up / ⬇ down**
+  (basement rides!), horizontal cycles **⬆ forward → ➡ right → ⬇ back → ⬅
+  left** — all relative to the way *you* are facing when you hop on, matching
+  the arrow painted on the block. Hop off and the block comes home and lands by
+  itself. Returning platforms have a garage-door-style **safety sensor**: one
+  will never land on (or in!) a player — it hovers overhead and waits for them
+  to step aside.
 
 Explosion size lives in `static/js/engine/world.js` (`BLAST_RADIUS`); glow
 brightness/reach are `GLOW_LIGHT_POWER` / `GLOW_RANGE` in the same file.

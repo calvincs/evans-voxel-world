@@ -20,18 +20,20 @@ export const PUMPKIN_LIT = 24;                                // jack-o'-lantern
 export const PROX_OFF = 25, PROX_OTHERS = 26, PROX_ALL = 27;  // proximity mine modes
 // Elevators: ten consecutive ids per direction; the id itself encodes the set
 // travel distance (1..10), which the block texture displays. The 11th strike
-// flips the direction (up<->down, forward<->reverse) and restarts at 1.
+// switches to the next direction and restarts at 1. Vertical: up <-> down.
+// Horizontal: forward -> right -> back -> left (relative to the rider's facing
+// when they board — the arrow on the block matches: ⬆ the way you look, ➡
+// your right, and so on).
 export const ELEV_UP = 30, ELEV_SIDE = 40, ELEV_DOWN = 50, ELEV_SIDE_REV = 60,
-             ELEV_MAX = 10;
-export const isElevUp = (b) => b >= ELEV_UP && b < ELEV_UP + ELEV_MAX;
-export const isElevSide = (b) => b >= ELEV_SIDE && b < ELEV_SIDE + ELEV_MAX;
-export const isElevDown = (b) => b >= ELEV_DOWN && b < ELEV_DOWN + ELEV_MAX;
-export const isElevSideRev = (b) => b >= ELEV_SIDE_REV && b < ELEV_SIDE_REV + ELEV_MAX;
-export const elevCount = (b) =>
-  isElevUp(b) ? b - ELEV_UP + 1 :
-  isElevSide(b) ? b - ELEV_SIDE + 1 :
-  isElevDown(b) ? b - ELEV_DOWN + 1 :
-  isElevSideRev(b) ? b - ELEV_SIDE_REV + 1 : 0;
+             ELEV_SIDE_R = 70, ELEV_SIDE_L = 80, ELEV_MAX = 10;
+export const ELEV_BASES = [ELEV_UP, ELEV_SIDE, ELEV_DOWN, ELEV_SIDE_REV,
+                           ELEV_SIDE_R, ELEV_SIDE_L];
+// The base id of an elevator block (its direction family), or 0 if not one.
+export const elevBase = (b) => {
+  for (const base of ELEV_BASES) if (b >= base && b < base + ELEV_MAX) return base;
+  return 0;
+};
+export const elevCount = (b) => { const base = elevBase(b); return base ? b - base + 1 : 0; };
 export const isProx = (b) => b === PROX_OFF || b === PROX_OTHERS || b === PROX_ALL;
 
 // Tools live in the hotbar but are never placed as world blocks. Firestone
@@ -55,12 +57,15 @@ const TILE = {
   mossy: 25, marble: 26, rainbow: 27,
   pumpkin_lit: 28, prox_off: 29, prox_others: 30, prox_all: 31,
 };
-// Elevator counter tiles: 32..41 up, 42..51 side, 52..61 down, 62..71 reverse.
+// Elevator counter tiles: 32..41 up, 42..51 side-forward, 52..61 down,
+// 62..71 side-back, 72..81 side-right, 82..91 side-left.
 for (let i = 1; i <= ELEV_MAX; i++) {
   TILE[`elev_up_${i}`] = 31 + i;
   TILE[`elev_side_${i}`] = 41 + i;
   TILE[`elev_down_${i}`] = 51 + i;
   TILE[`elev_side_rev_${i}`] = 61 + i;
+  TILE[`elev_side_r_${i}`] = 71 + i;
+  TILE[`elev_side_l_${i}`] = 81 + i;
 }
 
 // Blocks that emit light (rendered with an emissive glow material and fed to
@@ -81,6 +86,8 @@ for (let i = 0; i < ELEV_MAX; i++) {
   BLOCK_COLOR[ELEV_DOWN + i] = 0x7f93a8;
   BLOCK_COLOR[ELEV_SIDE + i] = 0xa8937f;
   BLOCK_COLOR[ELEV_SIDE_REV + i] = 0xa8937f;
+  BLOCK_COLOR[ELEV_SIDE_R + i] = 0xa8937f;
+  BLOCK_COLOR[ELEV_SIDE_L + i] = 0xa8937f;
 }
 export const blockColor = (b) => BLOCK_COLOR[b] ?? 0xaaaaaa;
 
@@ -115,14 +122,14 @@ export const BLOCKS = {
   [FIRESTONE]:{ name: 'Firestone (magic striker)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
 };
 for (let i = 1; i <= ELEV_MAX; i++) {
-  BLOCKS[ELEV_UP + i - 1] = { name: `Up Elevator (${i})`,
-    top: TILE[`elev_up_${i}`], side: TILE[`elev_up_${i}`], bottom: TILE[`elev_up_${i}`] };
-  BLOCKS[ELEV_SIDE + i - 1] = { name: `Side Elevator (${i})`,
-    top: TILE[`elev_side_${i}`], side: TILE[`elev_side_${i}`], bottom: TILE[`elev_side_${i}`] };
-  BLOCKS[ELEV_DOWN + i - 1] = { name: `Down Elevator (${i})`,
-    top: TILE[`elev_down_${i}`], side: TILE[`elev_down_${i}`], bottom: TILE[`elev_down_${i}`] };
-  BLOCKS[ELEV_SIDE_REV + i - 1] = { name: `Side Elevator (reverse ${i})`,
-    top: TILE[`elev_side_rev_${i}`], side: TILE[`elev_side_rev_${i}`], bottom: TILE[`elev_side_rev_${i}`] };
+  const t = (name) => ({ top: TILE[`${name}_${i}`], side: TILE[`${name}_${i}`],
+                         bottom: TILE[`${name}_${i}`] });
+  BLOCKS[ELEV_UP + i - 1] = { name: `Up Elevator (${i})`, ...t('elev_up') };
+  BLOCKS[ELEV_DOWN + i - 1] = { name: `Down Elevator (${i})`, ...t('elev_down') };
+  BLOCKS[ELEV_SIDE + i - 1] = { name: `Side Elevator (forward ${i})`, ...t('elev_side') };
+  BLOCKS[ELEV_SIDE_R + i - 1] = { name: `Side Elevator (right ${i})`, ...t('elev_side_r') };
+  BLOCKS[ELEV_SIDE_REV + i - 1] = { name: `Side Elevator (back ${i})`, ...t('elev_side_rev') };
+  BLOCKS[ELEV_SIDE_L + i - 1] = { name: `Side Elevator (left ${i})`, ...t('elev_side_l') };
 }
 
 // Transparent for face-culling purposes (a face is drawn against these).
@@ -141,10 +148,11 @@ export const HOTBAR = [
 // Everything available in the inventory picker (E) — no crafting, every block
 // (including the former "craft" specials) is simply available. Water is
 // placeable too: the mesher/transparency handle it anywhere, so kids can build
-// pools. Elevators appear once (distance 1); Firestone strikes re-tune them.
+// pools. Elevators appear once (distance 1) and jack-o'-lanterns aren't listed
+// at all — Firestone strikes re-tune the former and light the latter.
 export const ALL_BLOCKS = [
   GRASS, DIRT, STONE, COBBLE, MOSSY, MARBLE, PLANKS, WOOD, LEAVES, SAND,
-  SNOW, BRICK, GLASS, WATER, GLOWSTONE, GOLD, DIAMOND, PUMPKIN, PUMPKIN_LIT,
+  SNOW, BRICK, GLASS, WATER, GLOWSTONE, GOLD, DIAMOND, PUMPKIN,
   WOOL_RED, WOOL_BLUE, RAINBOW, TNT, PROX_OFF, ELEV_UP, ELEV_SIDE,
   FLINT, FIRESTONE,
 ];
@@ -222,15 +230,37 @@ function drawDigits(c, n, color) {
   }
 }
 
-// Elevator tile: metal pad, a direction chevron, and the set distance in big
+// A chunky pixel arrow (solid head + shaft) in the tile's top band (rows 1..5).
+// Directions are the rider's: up = forward / the way you look, right = your
+// right, and so on.
+function drawArrow(c, dir, color) {
+  c.fillStyle = color;
+  if (dir === 'up') {
+    c.fillRect(7, 1, 2, 1); c.fillRect(6, 2, 4, 1); c.fillRect(5, 3, 6, 1);
+    c.fillRect(7, 4, 2, 2);
+  } else if (dir === 'down') {
+    c.fillRect(7, 1, 2, 2);
+    c.fillRect(5, 3, 6, 1); c.fillRect(6, 4, 4, 1); c.fillRect(7, 5, 2, 1);
+  } else if (dir === 'right') {
+    c.fillRect(3, 3, 6, 1);                                        // shaft
+    c.fillRect(9, 1, 1, 5); c.fillRect(10, 2, 1, 3); c.fillRect(11, 3, 1, 1);
+  } else {                                                          // left
+    c.fillRect(7, 3, 6, 1);
+    c.fillRect(6, 1, 1, 5); c.fillRect(5, 2, 1, 3); c.fillRect(4, 3, 1, 1);
+  }
+}
+
+// Elevator tile: metal pad, a direction arrow, and the set distance in big
 // digits — "the count on the outside of the cube". Vertical elevators are
-// steel-blue (green ^ up / red v down); horizontal are tan (yellow > forward /
-// sky-blue < reverse).
+// steel-blue (green ⬆ / red ⬇); horizontal are tan with yellow arrows for the
+// rider-relative glide direction (⬆ forward, ➡ right, ⬇ back, ⬅ left).
 const ELEV_STYLE = {
-  up:   { body: '#7f93a8', mark: '#8dffab', salt: 60 },
-  down: { body: '#7f93a8', mark: '#ff8d7d', salt: 90 },
-  fwd:  { body: '#a8937f', mark: '#ffd34d', salt: 120 },
-  rev:  { body: '#a8937f', mark: '#9ad1ff', salt: 150 },
+  up:    { body: '#7f93a8', mark: '#8dffab', salt: 60,  arrow: 'up' },
+  down:  { body: '#7f93a8', mark: '#ff8d7d', salt: 90,  arrow: 'down' },
+  fwd:   { body: '#a8937f', mark: '#ffd34d', salt: 120, arrow: 'up' },
+  right: { body: '#a8937f', mark: '#ffd34d', salt: 150, arrow: 'right' },
+  back:  { body: '#a8937f', mark: '#ffd34d', salt: 180, arrow: 'down' },
+  left:  { body: '#a8937f', mark: '#ffd34d', salt: 210, arrow: 'left' },
 };
 const elevatorTile = (n, kind) => (c) => {
   const st = ELEV_STYLE[kind];
@@ -238,16 +268,7 @@ const elevatorTile = (n, kind) => (c) => {
   c.fillStyle = 'rgba(0,0,0,0.4)';                  // frame
   c.fillRect(0, 0, 16, 1); c.fillRect(0, 15, 16, 1);
   c.fillRect(0, 0, 1, 16); c.fillRect(15, 0, 1, 16);
-  c.fillStyle = st.mark;
-  if (kind === 'up') {                               // ^
-    for (let i = 0; i < 3; i++) { c.fillRect(7 - i, 2 + i, 1, 1); c.fillRect(8 + i, 2 + i, 1, 1); }
-  } else if (kind === 'down') {                      // v
-    for (let i = 0; i < 3; i++) { c.fillRect(7 - i, 4 - i, 1, 1); c.fillRect(8 + i, 4 - i, 1, 1); }
-  } else if (kind === 'fwd') {                       // >
-    for (let i = 0; i < 3; i++) { c.fillRect(9 + i, 1 + i, 1, 1); c.fillRect(9 + i, 5 - i, 1, 1); }
-  } else {                                           // <
-    for (let i = 0; i < 3; i++) { c.fillRect(6 - i, 1 + i, 1, 1); c.fillRect(6 - i, 5 - i, 1, 1); }
-  }
+  drawArrow(c, st.arrow, st.mark);
   drawDigits(c, n, '#ffffff');
 };
 
@@ -429,9 +450,11 @@ const TILE_PAINTERS = {
 };
 for (let i = 1; i <= ELEV_MAX; i++) {
   TILE_PAINTERS[`elev_up_${i}`] = elevatorTile(i, 'up');
-  TILE_PAINTERS[`elev_side_${i}`] = elevatorTile(i, 'fwd');
   TILE_PAINTERS[`elev_down_${i}`] = elevatorTile(i, 'down');
-  TILE_PAINTERS[`elev_side_rev_${i}`] = elevatorTile(i, 'rev');
+  TILE_PAINTERS[`elev_side_${i}`] = elevatorTile(i, 'fwd');
+  TILE_PAINTERS[`elev_side_r_${i}`] = elevatorTile(i, 'right');
+  TILE_PAINTERS[`elev_side_rev_${i}`] = elevatorTile(i, 'back');
+  TILE_PAINTERS[`elev_side_l_${i}`] = elevatorTile(i, 'left');
 }
 
 // Build the atlas texture. Uses /static/textures/<name>.png when present (only

@@ -19,23 +19,29 @@ import * as THREE from 'three';
 import * as audio from './audio.js';
 import {
   AIR, PUMPKIN, PUMPKIN_LIT, PROX_OFF, PROX_OTHERS, PROX_ALL,
-  ELEV_UP, ELEV_SIDE, ELEV_DOWN, ELEV_SIDE_REV, ELEV_MAX, elevCount, isProx,
+  ELEV_UP, ELEV_SIDE, ELEV_DOWN, ELEV_SIDE_REV, ELEV_SIDE_R, ELEV_SIDE_L,
+  ELEV_MAX, elevBase, elevCount, isProx,
   isSolid, BLOCKS, ATLAS_COLS, TILE_PX,
 } from './blocks.js';
 
 const key = (x, y, z) => `${x},${y},${z}`;
 
-// Per-direction elevator behavior: display arrow, what the 11th strike flips
-// to, and how to phrase it.
+// Per-direction elevator behavior: display arrow, how many 90° clockwise turns
+// from the rider's facing a horizontal one glides (0 fwd, 1 right, 2 back,
+// 3 left), and what the 11th strike switches to.
 const ELEV_INFO = {
-  [ELEV_UP]:       { arrow: '⬆', kind: 'up',   flipTo: ELEV_DOWN,
-                     flipMsg: '⬇ Flipped! Elevator now goes DOWN — set to 1' },
-  [ELEV_DOWN]:     { arrow: '⬇', kind: 'down', flipTo: ELEV_UP,
-                     flipMsg: '⬆ Flipped! Elevator now goes UP — set to 1' },
-  [ELEV_SIDE]:     { arrow: '➡', kind: 'side', flipTo: ELEV_SIDE_REV,
-                     flipMsg: '⬅ Flipped! Side elevator now glides BACKWARD — set to 1' },
-  [ELEV_SIDE_REV]: { arrow: '⬅', kind: 'side', flipTo: ELEV_SIDE,
-                     flipMsg: '➡ Flipped! Side elevator now glides FORWARD — set to 1' },
+  [ELEV_UP]:       { arrow: '⬆', kind: 'up',   turn: 0, next: ELEV_DOWN,
+                     nextMsg: '⬇ Flipped! Elevator now goes DOWN — set to 1' },
+  [ELEV_DOWN]:     { arrow: '⬇', kind: 'down', turn: 0, next: ELEV_UP,
+                     nextMsg: '⬆ Flipped! Elevator now goes UP — set to 1' },
+  [ELEV_SIDE]:     { arrow: '⬆', kind: 'side', turn: 0, next: ELEV_SIDE_R,
+                     nextMsg: '➡ Switched! Now glides to your RIGHT — set to 1' },
+  [ELEV_SIDE_R]:   { arrow: '➡', kind: 'side', turn: 1, next: ELEV_SIDE_REV,
+                     nextMsg: '⬇ Switched! Now glides BACKWARD — set to 1' },
+  [ELEV_SIDE_REV]: { arrow: '⬇', kind: 'side', turn: 2, next: ELEV_SIDE_L,
+                     nextMsg: '⬅ Switched! Now glides to your LEFT — set to 1' },
+  [ELEV_SIDE_L]:   { arrow: '⬅', kind: 'side', turn: 3, next: ELEV_SIDE,
+                     nextMsg: '⬆ Switched! Now glides FORWARD (where you look) — set to 1' },
 };
 
 const MINE_ARM_DELAY = 5;    // seconds from arming strike to a live sensor
@@ -94,15 +100,15 @@ export class Gear {
     }
     const count = elevCount(block);
     if (count > 0) {
-      const info = ELEV_INFO[block - (count - 1)];
+      const info = ELEV_INFO[elevBase(block)];
       audio.playIgnite(pos);
       if (count < ELEV_MAX) {
         this.world.setBlock(x, y, z, block + 1);
         this.msg(`${info.arrow} Elevator set to ${count + 1}`);
       } else {
-        // The 11th strike flips the direction and restarts the count at 1.
-        this.world.setBlock(x, y, z, info.flipTo);
-        this.msg(info.flipMsg);
+        // The 11th strike switches direction and restarts the count at 1.
+        this.world.setBlock(x, y, z, info.next);
+        this.msg(info.nextMsg);
       }
       return true;
     }
@@ -254,8 +260,8 @@ export class Gear {
 
   _launch(x, y, z, block) {
     const count = elevCount(block);
-    const base = block - (count - 1);
-    const kind = ELEV_INFO[base].kind;
+    const info = ELEV_INFO[elevBase(block)];
+    const kind = info.kind;
     let max = 0;
     let dir = { x: 0, z: 0 };
     if (kind === 'up') {
@@ -269,12 +275,12 @@ export class Gear {
         max = i;
       }
     } else {
-      // Sideways elevators travel the way the rider is facing (cardinal) —
-      // or the exact opposite for the reversed variant.
+      // Sideways elevators travel relative to the way the rider is facing
+      // when they board: forward, or turned 90° right / 180° back / 90° left.
       const fx = -Math.sin(this.player.yaw), fz = -Math.cos(this.player.yaw);
       dir = Math.abs(fx) > Math.abs(fz)
         ? { x: Math.sign(fx) || 1, z: 0 } : { x: 0, z: Math.sign(fz) || 1 };
-      if (base === ELEV_SIDE_REV) { dir.x = -dir.x; dir.z = -dir.z; }
+      for (let t = 0; t < info.turn; t++) dir = { x: -dir.z, z: dir.x };  // 90° cw
       for (let i = 1; i <= count; i++) {
         const cx = x + dir.x * i, cz = z + dir.z * i;
         // Needs room for the block and the rider standing on it.
