@@ -13,8 +13,10 @@ const floorDiv = (a, b) => Math.floor(a / b);
 const FUSE = 4.0;          // seconds a TNT ticks before it blows (time to run!)
 const BLAST_RADIUS = 3.4;  // block radius destroyed
 
-// Glowstone lighting.
-const GLOW_LIGHTS = 8;     // pool of point lights shared by nearest glowstones
+// Glowstone lighting. Every lit fragment pays for each active point light, so
+// weak (touch) GPUs get a smaller pool — mirroring the DPR cap in renderer.js.
+const GLOW_LIGHTS = (typeof matchMedia !== 'undefined'
+  && matchMedia('(pointer: coarse)').matches) ? 4 : 8;
 const GLOW_RANGE = 18;     // only glowstones within this (horizontal) cast light
 const GLOW_LIGHT_DIST = 14;// point-light reach
 const GLOW_LIGHT_POWER = 9;// peak point-light intensity at night

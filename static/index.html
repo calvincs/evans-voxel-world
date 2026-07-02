@@ -131,7 +131,7 @@
   <div id="overlay" class="hidden">
     <div class="panel">
       <h1 id="title">World</h1>
-      <ul class="controls">
+      <ul class="controls" id="controls-keys">
         <li><b>W A S D</b> — move</li>
         <li><b>Mouse</b> — look around</li>
         <li><b>Space</b> — jump &nbsp;·&nbsp; <b>Shift</b> — run</li>
@@ -144,6 +144,18 @@
         <li><b>M</b> — music on/off</li>
         <li><b>🎙️</b> button — join voice &nbsp;·&nbsp; hold <b>T</b> — talk</li>
         <li><b>Esc</b> — pause</li>
+      </ul>
+      <!-- Shown instead of the keyboard list on touch devices (main.js swaps). -->
+      <ul class="controls hidden" id="controls-touch">
+        <li><b>🕹️ left stick</b> — walk</li>
+        <li><b>drag the screen</b> — look around</li>
+        <li><b>⭡</b> — jump</li>
+        <li><b>⛏</b> — hold to break / hit</li>
+        <li><b>🧱</b> — hold to place blocks</li>
+        <li><b>tap the hotbar</b> — pick a block &nbsp;·&nbsp; <b>🎒</b> — all blocks</li>
+        <li><b>👁</b> — change view &nbsp;·&nbsp; <b>tap the map</b> — resize it</li>
+        <li><b>🔊</b> — sound &nbsp;·&nbsp; <b>🗣️</b> — hold to talk</li>
+        <li><b>⏸</b> — pause (this screen)</li>
       </ul>
       <div class="buttons">
         <button id="play">▶ Play</button>

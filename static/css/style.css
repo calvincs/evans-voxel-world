@@ -334,6 +334,7 @@ html, body {
   margin-bottom: 18px;
 }
 .controls b { color: #2f6fd6; }
+.controls.hidden { display: none; }
 .buttons {
   display: flex;
   flex-direction: column;
@@ -667,11 +668,19 @@ body:not(.in-game) #talk { display: none !important; }
 /* Pause sits with the music/voice/bag corner buttons (top-left holds the HUD). */
 #btn-menu  { right: 160px; top: 10px;     width: 42px; height: 42px; line-height: 38px; font-size: 18px; }
 
-/* On touch screens lift the hotbar above the on-screen buttons. */
+/* On touch screens lift the hotbar above the on-screen buttons, and give the
+   top-bar buttons kid-finger-sized targets with breathing room (44px is the
+   adult floor; kids need more). */
 @media (pointer: coarse) {
   #hotbar { bottom: 116px; }
   #health { bottom: 166px; }
   .slot { width: 42px; height: 42px; }
+  #music, #voice, #bag { width: 48px; height: 48px; line-height: 48px; font-size: 24px; }
+  #music { right: 12px; }
+  #voice { right: 70px; }
+  #bag   { right: 128px; }
+  #btn-menu { right: 186px; top: 10px; width: 48px; height: 48px; line-height: 44px; font-size: 20px; }
+  #minimap { top: 68px; }
 }
 
 /* --- Health / combat ------------------------------------------------------ */

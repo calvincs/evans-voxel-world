@@ -8,7 +8,8 @@
 // drawImage of the composed world canvas plus the markers.
 //
 // Markers: white arrow = you; coloured dots = other players; orange ring =
-// the village. Tap the map (or press N) to cycle big → small → hidden.
+// the village; small dots = creatures (gold villagers, red = a hunter that's
+// locked on). Tap the map (or press N) to cycle big → small → hidden.
 
 import { DIM, RENDER_DISTANCE } from './engine/constants.js';
 import { AIR, blockColor } from './blocks.js';
@@ -20,10 +21,11 @@ const SIZES = [140, 96, 0];          // css px; 0 = hidden
 const BLOCK_PX = 3;                  // display pixels per block (backing store)
 
 export class MiniMap {
-  constructor(world, player, remotes, canvas, village) {
+  constructor(world, player, remotes, mobs, canvas, village) {
     this.world = world;
     this.player = player;
     this.remotes = remotes;
+    this.mobs = mobs;
     this.canvas = canvas;
     this.village = village || null;  // {x, z, radius} or null
     this.ctx = canvas.getContext('2d');
@@ -140,6 +142,16 @@ export class MiniMap {
       ctx.beginPath();
       ctx.arc(this.village.x, this.village.z, Math.max(3, this.village.radius * 0.5), 0, Math.PI * 2);
       ctx.stroke();
+    }
+
+    // Creatures: red = a hunter that's locked on (worth glancing at, at
+    // night!), gold = villagers, soft white = everything else.
+    for (const m of this.mobs.mobs) {
+      ctx.fillStyle = m.mc ? '#ff4040'
+        : m.t.villager ? '#ffd24d' : 'rgba(255,255,255,0.8)';
+      ctx.beginPath();
+      ctx.arc(m.pos.x, m.pos.z, (m.mc ? 2.6 : 1.7) / BLOCK_PX, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     // Other players, in their character colours.

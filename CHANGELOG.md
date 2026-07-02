@@ -4,6 +4,33 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Review close-out: last hardening + tablet polish
+
+**Why:** five small items from the original review were still open, plus two
+bits of polish worth having.
+
+**What changed:**
+- **Voice signaling hardened** (`server/main.py`): WebRTC messages are now
+  rebuilt from whitelisted fields (never forwarded verbatim), size-capped
+  (SDP ≤ 25 KB, ICE ≤ 2 KB) and rate-limited — the last open item from the
+  security review.
+- **Tablet onboarding**: the pause screen now shows touch instructions on
+  touch devices (🕹️ walk, drag to look, ⛏ break, 🧱 place…) instead of
+  "W A S D" and "Esc"; the place button glyph changed from ◼ to 🧱; the
+  top-bar buttons grow to 48px with breathing room on touch screens.
+- **Account files locked down**: `users.json` (password hashes) and
+  `sessions.json` (login tokens) are now written owner-only (0600), and
+  existing files are tightened on load.
+- **Full-world egg feedback**: hatching an egg when the world already holds
+  its 64 placed creatures now explains itself ("🥚 This world is full of
+  creatures!") instead of silently doing nothing.
+- **Weak-GPU lighting**: touch devices get 4 glowstone point lights instead
+  of 8 — every lit pixel pays for each light, and tablets felt it.
+- **Minimap creatures**: creatures now appear as dots — gold villagers, soft
+  white animals, and bright red for a hunter that's locked onto someone.
+- **Sun/moon in the HUD**: the clock now carries ☀️ / 🌄 / 🌙 — a night
+  warning that doesn't require reading the time.
+
 ## 2026-07-02 — Creatures move to the server
 
 **Why:** the first cut of shared creatures made one player's browser the

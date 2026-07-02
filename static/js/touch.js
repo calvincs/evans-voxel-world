@@ -17,7 +17,7 @@ export function setupTouchControls(player) {
   const joy = make('div', 'joystick', null, root);
   const stick = make('div', 'stick', null, joy);
   const btnBreak = make('div', 'btn-break', 'touch-btn', root, '⛏');
-  const btnPlace = make('div', 'btn-place', 'touch-btn', root, '◼');
+  const btnPlace = make('div', 'btn-place', 'touch-btn', root, '🧱');  // reads "block", not "stop"
   const btnJump = make('div', 'btn-jump', 'touch-btn', root, '⭡');
   const btnView = make('div', 'btn-view', 'touch-btn', root, '👁');
   const btnMenu = make('div', 'btn-menu', 'touch-btn', root, '⏸');

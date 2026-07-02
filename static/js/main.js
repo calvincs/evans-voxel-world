@@ -301,6 +301,11 @@ function markOffline() {
 let assets = { textures: [], audio: {} };   // which optional override files exist
 
 async function main() {
+  // Tablet players get touch instructions, not "W A S D" and "Esc".
+  if (isTouch) {
+    $('controls-keys').classList.add('hidden');
+    $('controls-touch').classList.remove('hidden');
+  }
   startConnectionMonitor();
   try { assets = await (await fetch('/api/assets')).json(); } catch (_) {}
   audio.prefetchOverrides(assets.audio);
@@ -582,8 +587,8 @@ async function startGame(worldId, demo) {
   // Contraption blocks: jack-o'-lanterns, proximity mines, elevators. The
   // Firestone routes strikes here first; TNT stays with player/world.
   const gear = new Gear(world, player, mobs, remotes, atlas.image, (m) => toast(m, 3500));
-  // Corner minimap: you at the centre, village ring, friends as dots.
-  const minimap = new MiniMap(world, player, remotes, $('minimap'), cfg.village);
+  // Corner minimap: you at the centre, village ring, friends + creatures as dots.
+  const minimap = new MiniMap(world, player, remotes, mobs, $('minimap'), cfg.village);
   gear.myName = currentUser ? currentUser.name : '';      // mines spare their owner
   gear.setOwners(cfg.mines);                              // ...across reloads too
   player.onStrike = (x, y, z, b) => gear.strike(x, y, z, b);
@@ -650,6 +655,7 @@ async function startGame(worldId, demo) {
     // --- Creatures (simulated on the SERVER; we render its stream) -----------
     onMobs: (list) => mobs.applySnapshot(list),
     onMobDie: (m) => mobs.onDeath(m.x, m.y, m.z, m.t),
+    onNotice: (msg) => toast(String(msg).slice(0, 200), 3500),
     onMobBite: (m) => {
       if (!dead) player.hurt(m.amount, { from: { x: m.x, z: m.z }, source: m.source });
     },
@@ -1035,8 +1041,10 @@ async function startGame(worldId, demo) {
     }
     // Only touch the DOM when the shown text actually changes (most frames it
     // doesn't — coords are whole numbers and the clock ticks once a minute).
+    // The sun/moon icon is the pre-reader's night warning.
+    const phase = sky.daylight > 0.5 ? '☀️' : sky.daylight < 0.35 ? '🌙' : '🌄';
     const cstr =
-      `x ${player.pos.x.toFixed(0)}  y ${player.pos.y.toFixed(0)}  z ${player.pos.z.toFixed(0)}  ·  ${sky.clock()}`;
+      `x ${player.pos.x.toFixed(0)}  y ${player.pos.y.toFixed(0)}  z ${player.pos.z.toFixed(0)}  ·  ${phase} ${sky.clock()}`;
     if (cstr !== lastCoords) { coordsEl.textContent = cstr; lastCoords = cstr; }
 
     renderer.render(scene, camera);

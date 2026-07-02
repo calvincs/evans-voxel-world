@@ -729,7 +729,9 @@ async def world_ws(ws: WebSocket, wid: str):
     POS_KEYS = ("x", "y", "z", "yaw", "pitch")
     FX_KINDS = ("explode", "ignite")
     FX_WINDOW, FX_MAX = 10.0, 40       # per-client effect rate limit
+    VOICE_MAX = 150                    # signaling msgs / window (ICE bursts)
     fx_t0, fx_n = 0.0, 0
+    vc_t0, vc_n = 0.0, 0
 
     try:
         while True:
@@ -809,6 +811,11 @@ async def world_ws(ws: WebSocket, wid: str):
                     cid = "c" + _s.token_hex(4)
                     if _sim_for(w2).hatch(cid, rec["t"], rec["x"], rec["y"], rec["z"]):
                         store.add_creature(wid, cid, rec)
+                elif rec and w2 is not None:
+                    # The egg looked like it worked (place sound played) —
+                    # tell the kid why nothing hatched.
+                    await _send_safe(ws, {"type": "notice",
+                        "msg": "🥚 This world is full of creatures — make room first!"})
             elif t == "mobhit":
                 # A player swung at a creature — the sim applies the damage.
                 i, dmg = msg.get("i"), msg.get("dmg")
@@ -820,17 +827,43 @@ async def world_ws(ws: WebSocket, wid: str):
                                  max(-1.0, min(1.0, float(msg.get("dx", 0)))),
                                  max(-1.0, min(1.0, float(msg.get("dz", 0)))))
             elif t == "voice":
-                # WebRTC signaling. Tag the sender; deliver to one peer if a
-                # target id is given, otherwise to the whole room.
-                out = {**msg, "from": pid}
-                target = msg.get("to")
-                if target is None:
-                    await _broadcast(room, ws, out)
-                else:
-                    for w2, st in list(room.items()):
-                        if st["id"] == target:
-                            await _send_safe(w2, out)
-                            break
+                # WebRTC signaling. Rebuilt (never forwarded verbatim),
+                # size-capped and rate-limited: receivers hand these straight
+                # to the browser's RTC stack, so a hostile client must not be
+                # able to pump arbitrary megabytes at everyone in the room.
+                now = time.monotonic()
+                if now - vc_t0 > FX_WINDOW:
+                    vc_t0, vc_n = now, 0
+                vc_n += 1
+                sub = msg.get("sub")
+                if vc_n <= VOICE_MAX and sub in ("join", "leave", "offer", "answer", "ice"):
+                    out = {"type": "voice", "sub": sub, "from": pid}
+                    ok_payload = True
+                    if sub in ("offer", "answer"):
+                        sdp = msg.get("sdp")
+                        if (isinstance(sdp, dict) and sdp.get("type") in ("offer", "answer")
+                                and isinstance(sdp.get("sdp"), str) and len(sdp["sdp"]) <= 25000):
+                            out["sdp"] = {"type": sdp["type"], "sdp": sdp["sdp"]}
+                        else:
+                            ok_payload = False
+                    elif sub == "ice":
+                        c = msg.get("candidate")
+                        if isinstance(c, dict) and len(str(c)) <= 2000:
+                            out["candidate"] = {
+                                k: c.get(k) for k in
+                                ("candidate", "sdpMid", "sdpMLineIndex", "usernameFragment")
+                                if k in c}
+                        else:
+                            ok_payload = False
+                    if ok_payload:
+                        target = msg.get("to")
+                        if target is None:
+                            await _broadcast(room, ws, out)
+                        else:
+                            for w2, st in list(room.items()):
+                                if st["id"] == target:
+                                    await _send_safe(w2, out)
+                                    break
     except WebSocketDisconnect:
         pass
     except Exception:

@@ -63,6 +63,10 @@ class UserStore:
         if not os.path.exists(self.path):
             return
         try:
+            os.chmod(self.path, 0o600)   # tighten files created before this rule
+        except OSError:
+            pass
+        try:
             with open(self.path) as f:
                 self.users = json.load(f)
         except (json.JSONDecodeError, OSError):
@@ -75,6 +79,7 @@ class UserStore:
             json.dump(self.users, f)
             f.flush()
             os.fsync(f.fileno())     # survive power loss, not just a crash
+        os.chmod(tmp, 0o600)         # password hashes: owner-only, never 664
         os.replace(tmp, self.path)   # atomic on POSIX
 
     def _new_uid(self) -> str:
@@ -196,6 +201,10 @@ class SessionStore:
         if not os.path.exists(self.path):
             return
         try:
+            os.chmod(self.path, 0o600)   # tighten files created before this rule
+        except OSError:
+            pass
+        try:
             with open(self.path) as f:
                 self.sessions = json.load(f)
         except (json.JSONDecodeError, OSError):
@@ -209,6 +218,7 @@ class SessionStore:
             json.dump(self.sessions, f)
             f.flush()
             os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)         # session tokens: owner-only, never 664
         os.replace(tmp, self.path)
 
     def _purge_expired(self):

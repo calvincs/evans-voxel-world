@@ -72,6 +72,7 @@ export class Net {
       case 'mobdie':  h.onMobDie && h.onMobDie(m); break;
       case 'mobbite': h.onMobBite && h.onMobBite(m); break;
       case 'peaceful': h.onPeaceful && h.onPeaceful(!!m.on); break;
+      case 'notice':  h.onNotice && h.onNotice(m.msg); break;
     }
   }
 
