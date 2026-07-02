@@ -1,8 +1,8 @@
 // Ambient wildlife: land animals (pigs, sheep, cows, wolves, chickens, spiders)
 // that wander on grass, plus squid that swim in lakes and oceans. They spawn
 // near the player, amble/swim with a little AI, and despawn when far away.
-// Client-side and ambient — they don't fight, drop items, or sync across
-// multiplayer; they're just life in the world.
+// Hostiles hunt: they chase, hop down holes, and pathfind around corners.
+// Client-side and ambient — they don't drop items or sync across multiplayer.
 
 import * as THREE from 'three';
 import { DIM } from './engine/constants.js';
@@ -35,6 +35,14 @@ const ATTACK_RANGE = 1.7;   // how close a hostile must be to land a hit
 const ATTACK_INTERVAL = 1.0;// seconds between a mob's hits
 const PLAYER_REACH = 3.4;   // how far the player's swing reaches a creature
 const PLAYER_DMG = 4;       // damage per swing
+
+// Hunting smarts (hostiles only) and prey nerves.
+const CHASE_DROP = 3;       // blocks a hunter will hop down while chasing
+const CHASE_DROP_DEEP = 8;  // ...when the prey is below it (pits, stairwells)
+const PATH_INTERVAL = 0.6;  // min seconds between pathfinder calls per mob
+const PATH_NODES = 400;     // A* expansion budget per call
+const PATH_TTL = 2;         // seconds a computed path stays trusted
+const FLEE_TIME = 2.5;      // seconds a grazer bolts after taking a hit
 
 // Optional AI-generated skins live at /static/textures/mob_<type>.png. When one
 // exists it's loaded once and shared by every mob of that type; otherwise the
@@ -196,6 +204,61 @@ function buildSquid(t, mats, group) {
 
 const BUILDERS = { quad: buildQuad, chicken: buildChicken, spider: buildSpider, squid: buildSquid };
 
+// --- tiny voxel A* for hunters ----------------------------------------------
+// Moves: the four compass steps, a one-block climb, or a drop of up to
+// `maxDrop` blocks. Water is impassable (land hunters don't swim; the squid
+// has its own senses). Expansion is budgeted, and when the budget runs out
+// the path leads to the reachable cell nearest the goal, so a partial answer
+// still closes distance. Returns [{x,y,z}, ...] starting just after `s`.
+function findPath(world, sx, sy, sz, tx, ty, tz, maxDrop) {
+  const solid = (x, y, z) => isSolid(world.getBlock(x, y, z));
+  const water = (x, y, z) => world.getBlock(x, y, z) === WATER;
+  // A cell a hunter can occupy: open, dry, with a floor under it.
+  const stand = (x, y, z) => !solid(x, y, z) && !water(x, y, z) && solid(x, y - 1, z);
+  const h = (x, y, z) => Math.abs(x - tx) + Math.abs(y - ty) + Math.abs(z - tz);
+
+  const start = { x: sx, y: sy, z: sz, g: 0, f: h(sx, sy, sz), prev: null };
+  const open = [start];
+  const seen = new Map([[`${sx},${sy},${sz}`, start]]);
+  let best = start;
+
+  for (let n = 0; n < PATH_NODES && open.length; n++) {
+    let bi = 0;                       // linear pick is fine at this queue size
+    for (let i = 1; i < open.length; i++) if (open[i].f < open[bi].f) bi = i;
+    const cur = open.splice(bi, 1)[0];
+    if (h(cur.x, cur.y, cur.z) < h(best.x, best.y, best.z)) best = cur;
+    if (cur.x === tx && cur.z === tz && Math.abs(cur.y - ty) <= 1) { best = cur; break; }
+
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = cur.x + dx, nz = cur.z + dz;
+      let ny = null, cost = 1;
+      if (stand(nx, cur.y, nz)) ny = cur.y;                        // level walk
+      else if (!solid(nx, cur.y, nz) && !water(nx, cur.y, nz)) {   // open, no floor: a drop?
+        for (let m = 1; m <= maxDrop + 1; m++) {
+          const b = world.getBlock(nx, cur.y - m, nz);
+          if (b === WATER) break;
+          if (isSolid(b)) { if (m >= 2) { ny = cur.y - m + 1; cost = 1 + (m - 1) * 0.4; } break; }
+        }
+      } else if (!solid(cur.x, cur.y + 1, cur.z) && stand(nx, cur.y + 1, nz)) {
+        ny = cur.y + 1; cost = 1.4;                                // one-block climb
+      }
+      if (ny === null) continue;
+      const key = `${nx},${ny},${nz}`;
+      const g = cur.g + cost;
+      const old = seen.get(key);
+      if (old && old.g <= g) continue;
+      const node = { x: nx, y: ny, z: nz, g, f: g + h(nx, ny, nz), prev: cur };
+      seen.set(key, node);
+      open.push(node);
+    }
+  }
+
+  const path = [];
+  for (let n = best; n && n.prev; n = n.prev) path.push({ x: n.x, y: n.y, z: n.z });
+  path.reverse();
+  return path;
+}
+
 class Mob {
   constructor(scene, type, x, y, z) {
     this.scene = scene;
@@ -220,6 +283,11 @@ class Mob {
     this.hurtFlash = 0;
     this.chasing = false;        // was chasing last frame (gates the growl)
     this.kbx = 0; this.kbz = 0;  // knockback impulse, decays over time
+    this.fleeT = 0;              // grazer panic timer after taking a hit
+    this.path = null;            // hunter's current waypoint list (block coords)
+    this.pathT = 0;              // cooldown between pathfinder calls
+    this.pathAge = 0;            // how long we've trusted the current path
+    this.stuckT = 0;             // seconds of no progress while hunting
 
     this.group = new THREE.Group();
     const skin = SKIN[type];
@@ -259,6 +327,13 @@ class Mob {
     if (dir) {
       this.kbx = dir.x * 7; this.kbz = dir.z * 7;
       if (!this.aquatic && this.onGround) this.vel.y = Math.max(this.vel.y, 4.5);
+      // Grazers bolt away from the blow; hunters are already coming for you.
+      if (!this.hostile && !this.aquatic) {
+        this.fleeT = FLEE_TIME;
+        this.walking = true;
+        this.timer = FLEE_TIME;
+        this.targetYaw = Math.atan2(-dir.x, -dir.z);
+      }
     }
     for (const m of this.flashMats) if (m.emissive) m.emissive.setHex(0x661111);
   }
@@ -273,6 +348,7 @@ class Mob {
   }
 
   _chooseAction() {
+    if (this.fleeT > 0) { this.walking = true; this.timer = 0.5; return; }   // still bolting
     if (Math.random() < 0.45) { this.walking = true; this.targetYaw = Math.random() * Math.PI * 2; this.timer = 1.5 + Math.random() * 2.5; }
     else { this.walking = false; this.timer = 1 + Math.random() * 2.5; }
   }
@@ -331,10 +407,12 @@ class Mob {
   }
 
   // Land movement: wander, gravity + voxel collision, don't walk off cliffs.
-  // Hostiles instead home in on a nearby player and bite.
+  // Hostiles home in on a nearby player and bite; they'll hop down into holes
+  // and pathfind around corners to reach you. Grazers bolt for a bit when hit.
   _walk(dt, world, player) {
     this.timer -= dt;
     if (this.timer <= 0) this._chooseAction();
+    if (this.fleeT > 0) this.fleeT -= dt;
 
     let chasing = false;
     if (this.hostile && player) {
@@ -343,12 +421,15 @@ class Mob {
       if (dist < DETECT) {
         chasing = true;
         this.walking = true;
-        this.targetYaw = Math.atan2(-dx, -dz);   // face the player
-        this._tryAttack(player, dist);
+        this._steerChase(dt, world, player, dx, dz);
+        // Bite range is 3-D so a wolf on the rim of your pit can't nip you
+        // through two blocks of floor.
+        this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
       }
     }
     if (chasing && !this.chasing) audio.playGrowl(this.pos);   // fair warning!
     this.chasing = chasing;
+    if (!chasing) { this.path = null; this.stuckT = 0; }
 
     let dy = this.targetYaw - this.yaw;
     while (dy > Math.PI) dy -= 2 * Math.PI;
@@ -356,7 +437,10 @@ class Mob {
     this.yaw += Math.max(-TURN * dt, Math.min(TURN * dt, dy));
 
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
-    let speed = this.walking ? this.t.speed * (chasing ? 1.15 : 1) : 0;
+    let speed = this.walking ? this.t.speed * (chasing ? 1.15 : this.fleeT > 0 ? 1.6 : 1) : 0;
+    // A hunter brakes into sharp turns: a tight corner (doorway, pit rim)
+    // needs a pivot, not an orbit that sails past the opening.
+    if (chasing && Math.abs(dy) > 0.8) speed *= 0.35;
 
     if (this.walking) {
       const ax = Math.floor(this.pos.x + fx * 0.7), az = Math.floor(this.pos.z + fz * 0.7);
@@ -366,9 +450,14 @@ class Mob {
       // wolves can't chase you in where you out-swim them).
       const waterAhead = world.getBlock(ax, Math.floor(this.pos.y + 0.1), az) === WATER ||
                          world.getBlock(ax, Math.floor(this.pos.y - 0.4), az) === WATER;
-      // Don't walk off cliffs — but a chasing hostile just stops at the edge
-      // instead of turning away, so it stays locked on.
-      if (!groundAhead || waterAhead) { speed = 0; if (!chasing) { this.walking = false; this.timer = 0.4; this.targetYaw = this.yaw + 2.2; } }
+      // A hunter walks off the edge when there's dry footing within reach.
+      const dropOk = chasing && !waterAhead && !groundAhead && this._dropAheadOk(world, ax, az, player);
+      if ((waterAhead || !groundAhead) && !dropOk) {
+        speed = 0;
+        // A grazer turns away (and keeps sprinting if it's mid-flight); a
+        // hunter holds the rim, locked on, until the pathfinder finds a way.
+        if (!chasing) { this.walking = this.fleeT > 0; this.timer = 0.4; this.targetYaw = this.yaw + 2.2; }
+      }
     }
 
     // Knockback fades fast; it rides on top of the walk velocity.
@@ -383,25 +472,86 @@ class Mob {
       this.vel.y = Math.max(this.vel.y, 1.5);
     }
 
+    const px = this.pos.x, pz = this.pos.z;
     if (this._stepMove(world, 'x', this.vel.x * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.x = 0; }
     if (this._stepMove(world, 'z', this.vel.z * dt)) { if (!chasing) this.targetYaw = this.yaw + 1.5; this.vel.z = 0; }
     const hitY = this._moveAxis(world, 'y', this.vel.y * dt);
     if (hitY) { this.onGround = this.vel.y < 0; this.vel.y = 0; } else this.onGround = false;
 
+    // No progress while hunting on foot (a wall, a corner, a too-deep rim)
+    // charges the stuck timer — that's the pathfinder's cue in _steerChase.
+    if (chasing && this.onGround) {
+      const moved = Math.hypot(this.pos.x - px, this.pos.z - pz);
+      if (moved < this.t.speed * dt * 0.35) this.stuckT += dt;
+      else this.stuckT = Math.max(0, this.stuckT - dt * 2);
+    }
+
     this.curSpeed = speed;
     this.moving = speed > 0 && this.onGround;
   }
 
+  // Direct pursuit with a fallback brain: aim straight at the player, and when
+  // that stops closing distance, buy a path from A* and follow its waypoints
+  // until they're consumed or go stale.
+  _steerChase(dt, world, player, dx, dz) {
+    this.pathT -= dt;
+    if (this.stuckT > 0.35 && this.pathT <= 0 && this.onGround) {
+      this.pathT = PATH_INTERVAL;
+      const drop = player.pos.y < this.pos.y - 1.5 ? CHASE_DROP_DEEP : CHASE_DROP;
+      const p = findPath(world,
+        Math.floor(this.pos.x), Math.floor(this.pos.y + 0.01), Math.floor(this.pos.z),
+        Math.floor(player.pos.x), Math.floor(player.pos.y + 0.01), Math.floor(player.pos.z), drop);
+      this.path = p.length ? p : null;
+      this.pathAge = 0;
+    }
+    if (this.path) {
+      this.pathAge += dt;
+      while (this.path.length) {   // consume waypoints as we arrive on them
+        const wp = this.path[0];
+        if (Math.abs(wp.y - this.pos.y) < 1.2 &&
+            Math.hypot(wp.x + 0.5 - this.pos.x, wp.z + 0.5 - this.pos.z) < 0.4) this.path.shift();
+        else break;
+      }
+      if (!this.path.length || this.pathAge > PATH_TTL) this.path = null;
+    }
+    if (this.path) {
+      const wp = this.path[0], wx = wp.x + 0.5 - this.pos.x, wz = wp.z + 0.5 - this.pos.z;
+      if (Math.hypot(wx, wz) > 0.05) this.targetYaw = Math.atan2(-wx, -wz);
+    } else {
+      this.targetYaw = Math.atan2(-dx, -dz);   // face the player
+    }
+  }
+
+  // A hunter jumps down a hole when there's dry footing within reach — and it
+  // reaches farther when its prey is somewhere below the rim.
+  _dropAheadOk(world, ax, az, player) {
+    const maxDrop = player && player.pos.y < this.pos.y - 1.5 ? CHASE_DROP_DEEP : CHASE_DROP;
+    const y = Math.floor(this.pos.y);
+    for (let m = 2; m <= maxDrop + 1; m++) {
+      const b = world.getBlock(ax, y - m, az);
+      if (b === WATER) return false;
+      if (isSolid(b)) return true;
+    }
+    return false;
+  }
+
   // Water movement: drift on a heading, turn back at the water's edge, and bob
-  // up and down while staying fully submerged.
+  // up and down while staying fully submerged. A hunting squid also chases
+  // depth: it dives or rises toward the player instead of holding spawn depth.
   _swim(dt, world, player) {
     this.timer -= dt;
     if (this.timer <= 0) { this.targetYaw = this.yaw + (Math.random() - 0.5) * 3.0; this.timer = 1.5 + Math.random() * 2.5; }
 
     // Home toward a nearby player (still confined to water) and bite if close.
+    let dive = 0;
     if (this.hostile && player) {
       const dx = player.pos.x - this.pos.x, dz = player.pos.z - this.pos.z;
-      if (Math.hypot(dx, dz) < DETECT) this.targetYaw = Math.atan2(-dx, -dz);
+      if (Math.hypot(dx, dz) < DETECT) {
+        this.targetYaw = Math.atan2(-dx, -dz);
+        // Close the depth gap between body centre and the player's chest.
+        const gap = (player.pos.y + 0.9) - (this.pos.y + this.t.bh * 0.5);
+        if (Math.abs(gap) > 0.35) dive = Math.max(-this.t.speed, Math.min(this.t.speed, gap));
+      }
       this._tryAttack(player, Math.hypot(dx, player.pos.y - this.pos.y, dz));
     }
 
@@ -418,10 +568,12 @@ class Mob {
     if (this._inWater(world, nx, this.pos.y, nz)) { this.pos.x = nx; this.pos.z = nz; }
     else { this.targetYaw = this.yaw + 2.4; this.timer = Math.min(this.timer, 0.4); }
 
-    // Gentle vertical drift, but keep both bottom and top of the body in water
-    // so it never breaches the surface or sinks into the floor.
+    // Vertical: chase depth while hunting, else a gentle bob — either way both
+    // bottom and top of the body stay in water so it never breaches the
+    // surface or sinks into the floor.
     this.bob += dt;
-    const ny = this.pos.y + Math.sin(this.bob * 0.8) * 0.35 * dt;   // gentle rise/sink
+    const vy = dive !== 0 ? dive : Math.sin(this.bob * 0.8) * 0.35;
+    const ny = this.pos.y + vy * dt;
     if (this._inWater(world, this.pos.x, ny, this.pos.z) &&
         this._inWater(world, this.pos.x, ny + this.t.bh, this.pos.z)) {
       this.pos.y = ny;
