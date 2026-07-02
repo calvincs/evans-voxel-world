@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { DIM, RENDER_DISTANCE } from './constants.js';
 import { Chunk } from './chunk.js';
-import { AIR, STONE, WATER, TNT, GLOWSTONE } from '../blocks.js';
+import { AIR, STONE, WATER, TNT, isGlow } from '../blocks.js';
 import * as audio from '../audio.js';
 
 const key = (cx, cz) => `${cx},${cz}`;
@@ -144,10 +144,10 @@ export class World {
     const prev = chunk.getLocal(lx, wy, lz);
     chunk.setLocal(lx, wy, lz, block);
 
-    // Keep the glowstone light index in sync.
+    // Keep the glowing-block light index in sync (glowstone, jack-o'-lanterns).
     const gk = `${wx},${wy},${wz}`;
-    if (block === GLOWSTONE) { this.glow.set(gk, [wx, wy, wz]); this._glowDirty = true; }
-    else if (prev === GLOWSTONE) { this.glow.delete(gk); this._glowDirty = true; }
+    if (isGlow(block)) { this.glow.set(gk, [wx, wy, wz]); this._glowDirty = true; }
+    else if (isGlow(prev)) { this.glow.delete(gk); this._glowDirty = true; }
 
     this._markDirty(cx, cz);
     if (lx === 0) this._markDirty(cx - 1, cz);
@@ -359,7 +359,7 @@ export class World {
   _scanGlow(cx, cz, data, add) {
     const { CX, CZ } = DIM;
     for (let i = 0; i < data.length; i++) {
-      if (data[i] !== GLOWSTONE) continue;
+      if (!isGlow(data[i])) continue;
       const x = i % CX;
       const z = Math.floor(i / CX) % CZ;
       const y = Math.floor(i / (CX * CZ));

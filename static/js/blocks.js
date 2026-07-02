@@ -14,8 +14,21 @@ export const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5,
              WOOL_RED = 16, WOOL_BLUE = 17, TNT = 18, FLINT = 19, GLOWSTONE = 20,
              MOSSY = 21, MARBLE = 22, RAINBOW = 23;
 
+// Contraption blocks (see gear.js). A Firestone strike changes their state,
+// which is just a block swap — so it persists and syncs like any other edit.
+export const PUMPKIN_LIT = 24;                                // jack-o'-lantern
+export const PROX_OFF = 25, PROX_OTHERS = 26, PROX_ALL = 27;  // proximity mine modes
+// Elevators: ten consecutive ids each; the id itself encodes the set travel
+// distance (1..10), which the block texture displays.
+export const ELEV_UP = 30, ELEV_SIDE = 40, ELEV_MAX = 10;
+export const isElevUp = (b) => b >= ELEV_UP && b < ELEV_UP + ELEV_MAX;
+export const isElevSide = (b) => b >= ELEV_SIDE && b < ELEV_SIDE + ELEV_MAX;
+export const elevCount = (b) =>
+  isElevUp(b) ? b - ELEV_UP + 1 : isElevSide(b) ? b - ELEV_SIDE + 1 : 0;
+export const isProx = (b) => b === PROX_OFF || b === PROX_OTHERS || b === PROX_ALL;
+
 // Tools live in the hotbar but are never placed as world blocks. Firestone
-// lights TNT instead of placing a block.
+// strikes blocks: lights TNT and pumpkins, arms mines, sets elevators.
 export const FIRESTONE = 100;
 const TOOLS = new Set([FIRESTONE]);
 export const isTool = (b) => TOOLS.has(b);
@@ -32,10 +45,17 @@ const TILE = {
   gold: 16, diamond: 17, wool_red: 18, wool_blue: 19,
   tnt_side: 20, tnt_top: 21, flint: 22, firestone: 23, glowstone: 24,
   mossy: 25, marble: 26, rainbow: 27,
+  pumpkin_lit: 28, prox_off: 29, prox_others: 30, prox_all: 31,
 };
+// Elevator counter tiles: slots 32..41 (up 1..10) and 42..51 (side 1..10).
+for (let i = 1; i <= ELEV_MAX; i++) {
+  TILE[`elev_up_${i}`] = 31 + i;
+  TILE[`elev_side_${i}`] = 41 + i;
+}
 
-// Blocks that emit light (rendered with an emissive glow material).
-export const isGlow = (b) => b === GLOWSTONE;
+// Blocks that emit light (rendered with an emissive glow material and fed to
+// the night-time point-light pool).
+export const isGlow = (b) => b === GLOWSTONE || b === PUMPKIN_LIT;
 
 // Representative colour per block, for break-dust particles.
 const BLOCK_COLOR = {
@@ -44,7 +64,12 @@ const BLOCK_COLOR = {
   [GLASS]: 0xcfe0ff, [BRICK]: 0xa43b2a, [COBBLE]: 0x7e7e7e, [SNOW]: 0xeef3fa,
   [PUMPKIN]: 0xe08a2a, [GOLD]: 0xf1c92e, [DIAMOND]: 0x56d6d6, [WOOL_RED]: 0xc63f3f,
   [WOOL_BLUE]: 0x3f59c6, [TNT]: 0xc0392b, [FLINT]: 0x3b3f47, [GLOWSTONE]: 0xffcb52,
+  [PUMPKIN_LIT]: 0xffb63e, [PROX_OFF]: 0x6f7683, [PROX_OTHERS]: 0xd7b23e, [PROX_ALL]: 0xd0503e,
 };
+for (let i = 0; i < ELEV_MAX; i++) {
+  BLOCK_COLOR[ELEV_UP + i] = 0x7f93a8;
+  BLOCK_COLOR[ELEV_SIDE + i] = 0xa8937f;
+}
 export const blockColor = (b) => BLOCK_COLOR[b] ?? 0xaaaaaa;
 
 export const BLOCKS = {
@@ -71,8 +96,18 @@ export const BLOCKS = {
   [MOSSY]:    { name: 'Mossy Cobble', top: TILE.mossy,  side: TILE.mossy,   bottom: TILE.mossy },
   [MARBLE]:   { name: 'Marble',    top: TILE.marble,    side: TILE.marble,   bottom: TILE.marble },
   [RAINBOW]:  { name: 'Rainbow',   top: TILE.rainbow,   side: TILE.rainbow,  bottom: TILE.rainbow },
-  [FIRESTONE]:{ name: 'Firestone (lights TNT)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
+  [PUMPKIN_LIT]: { name: "Jack-o'-Lantern", top: TILE.pumpkin_top, side: TILE.pumpkin_lit, bottom: TILE.pumpkin_top },
+  [PROX_OFF]:    { name: 'Proximity Mine (off)',      top: TILE.prox_off,    side: TILE.prox_off,    bottom: TILE.prox_off },
+  [PROX_OTHERS]: { name: 'Proximity Mine (others)',   top: TILE.prox_others, side: TILE.prox_others, bottom: TILE.prox_others },
+  [PROX_ALL]:    { name: 'Proximity Mine (EVERYONE)', top: TILE.prox_all,    side: TILE.prox_all,    bottom: TILE.prox_all },
+  [FIRESTONE]:{ name: 'Firestone (magic striker)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
 };
+for (let i = 1; i <= ELEV_MAX; i++) {
+  BLOCKS[ELEV_UP + i - 1] = { name: `Up Elevator (${i})`,
+    top: TILE[`elev_up_${i}`], side: TILE[`elev_up_${i}`], bottom: TILE[`elev_up_${i}`] };
+  BLOCKS[ELEV_SIDE + i - 1] = { name: `Side Elevator (${i})`,
+    top: TILE[`elev_side_${i}`], side: TILE[`elev_side_${i}`], bottom: TILE[`elev_side_${i}`] };
+}
 
 // Transparent for face-culling purposes (a face is drawn against these).
 const TRANSPARENT = new Set([AIR, WATER, GLASS, LEAVES]);
@@ -87,20 +122,15 @@ export const HOTBAR = [
   GRASS, DIRT, STONE, COBBLE, PLANKS, WOOD, GLASS, GLOWSTONE,
 ];
 
-// Everything available in the inventory picker (E). Water is placeable — the
-// mesher/transparency already handle it anywhere, so kids can build pools.
+// Everything available in the inventory picker (E) — no crafting, every block
+// (including the former "craft" specials) is simply available. Water is
+// placeable too: the mesher/transparency handle it anywhere, so kids can build
+// pools. Elevators appear once (distance 1); Firestone strikes re-tune them.
 export const ALL_BLOCKS = [
   GRASS, DIRT, STONE, COBBLE, MOSSY, MARBLE, PLANKS, WOOD, LEAVES, SAND,
-  SNOW, BRICK, GLASS, WATER, GLOWSTONE, GOLD, DIAMOND, PUMPKIN,
-  WOOL_RED, WOOL_BLUE, RAINBOW, TNT, FLINT, FIRESTONE,
-];
-
-// "Crafting" (creative twist): combine two blocks to unlock a special one.
-// Inputs are flavour only — nothing is consumed.
-export const CRAFT = [
-  { out: MOSSY,   inputs: [COBBLE, LEAVES] },
-  { out: MARBLE,  inputs: [STONE, DIAMOND] },
-  { out: RAINBOW, inputs: [WOOL_RED, WOOL_BLUE] },
+  SNOW, BRICK, GLASS, WATER, GLOWSTONE, GOLD, DIAMOND, PUMPKIN, PUMPKIN_LIT,
+  WOOL_RED, WOOL_BLUE, RAINBOW, TNT, PROX_OFF, ELEV_UP, ELEV_SIDE,
+  FLINT, FIRESTONE,
 ];
 
 // --- Procedural pixel-art tiles ---------------------------------------------
@@ -128,6 +158,69 @@ function speckle(ctx, base, salt, jitter) {
       ctx.fillRect(x, y, 1, 1);
     }
 }
+
+// Shared pieces for the pumpkin / jack-o'-lantern and proximity-mine tiles.
+function pumpkinBody(c) {
+  speckle(c, '#e08a2a', 20, 18);
+  c.fillStyle = shade('#b56a16', 0);                // vertical ridges
+  for (let x = 2; x < 16; x += 4) c.fillRect(x, 0, 1, 16);
+}
+function pumpkinFace(c, col) {
+  c.fillStyle = col;                                // carved face
+  c.fillRect(3, 5, 2, 2); c.fillRect(11, 5, 2, 2);       // eyes
+  c.fillRect(7, 6, 2, 2);                                // nose
+  c.fillRect(4, 10, 8, 1); c.fillRect(4, 9, 1, 1);
+  c.fillRect(11, 9, 1, 1); c.fillRect(6, 11, 1, 1); c.fillRect(9, 11, 1, 1);  // grin
+}
+function proxBody(c) {
+  speckle(c, '#565c66', 70, 14);                    // gunmetal housing
+  c.fillStyle = 'rgba(0,0,0,0.45)';                 // frame
+  c.fillRect(0, 0, 16, 1); c.fillRect(0, 15, 16, 1);
+  c.fillRect(0, 0, 1, 16); c.fillRect(15, 0, 1, 16);
+  c.fillStyle = '#3a3f47';                          // sensor recess
+  c.fillRect(4, 5, 8, 6);
+}
+function proxEye(c, col) {
+  c.fillStyle = col;
+  c.fillRect(6, 6, 4, 4);
+  c.fillStyle = '#1c1c22';
+  c.fillRect(7, 7, 2, 2);                           // pupil
+}
+
+// Tiny 3x5 digit font (drawn at 2x) for the elevator distance counters.
+const DIGITS = [
+  '111101101101111', '010110010010111', '111001111100111', '111001111001111',
+  '101101111001001', '111100111001111', '111100111101111', '111001010010010',
+  '111101111101111', '111101111001111',
+];
+function drawDigits(c, n, color) {
+  const s = String(n);
+  let x0 = Math.floor((16 - (s.length * 6 + (s.length - 1) * 2)) / 2);
+  c.fillStyle = color;
+  for (const ch of s) {
+    const bits = DIGITS[+ch];
+    for (let r = 0; r < 5; r++)
+      for (let col = 0; col < 3; col++)
+        if (bits[r * 3 + col] === '1') c.fillRect(x0 + col * 2, 6 + r * 2, 2, 2);
+    x0 += 8;
+  }
+}
+
+// Elevator tile: metal pad, a direction chevron, and the set distance in big
+// digits — "the count on the outside of the cube".
+const elevatorTile = (n, up) => (c) => {
+  speckle(c, up ? '#7f93a8' : '#a8937f', 60 + n + (up ? 0 : 30), 16);
+  c.fillStyle = 'rgba(0,0,0,0.4)';                  // frame
+  c.fillRect(0, 0, 16, 1); c.fillRect(0, 15, 16, 1);
+  c.fillRect(0, 0, 1, 16); c.fillRect(15, 0, 1, 16);
+  c.fillStyle = up ? '#8dffab' : '#ffd34d';
+  if (up) {                                          // ^ chevron
+    for (let i = 0; i < 3; i++) { c.fillRect(7 - i, 2 + i, 1, 1); c.fillRect(8 + i, 2 + i, 1, 1); }
+  } else {                                           // > chevron
+    for (let i = 0; i < 3; i++) { c.fillRect(9 + i, 1 + i, 1, 1); c.fillRect(9 + i, 5 - i, 1, 1); }
+  }
+  drawDigits(c, n, '#ffffff');
+};
 
 const TILE_PAINTERS = {
   dirt: (c) => speckle(c, '#8a5a3b', 1, 40),
@@ -218,15 +311,20 @@ const TILE_PAINTERS = {
     c.fillStyle = '#6e4a18';                        // stem
     c.fillRect(7, 6, 2, 4);
   },
-  pumpkin_side: (c) => {
-    speckle(c, '#e08a2a', 20, 18);
-    c.fillStyle = shade('#b56a16', 0);              // vertical ridges
-    for (let x = 2; x < 16; x += 4) c.fillRect(x, 0, 1, 16);
-    c.fillStyle = '#3a2408';                        // carved face
-    c.fillRect(3, 5, 2, 2); c.fillRect(11, 5, 2, 2);     // eyes
-    c.fillRect(7, 6, 2, 2);                              // nose
-    c.fillRect(4, 10, 8, 1); c.fillRect(4, 9, 1, 1);
-    c.fillRect(11, 9, 1, 1); c.fillRect(6, 11, 1, 1); c.fillRect(9, 11, 1, 1);  // grin
+  pumpkin_side: (c) => { pumpkinBody(c); pumpkinFace(c, '#3a2408'); },
+  pumpkin_lit: (c) => {
+    pumpkinBody(c);
+    c.fillStyle = 'rgba(255,214,110,0.35)';         // warm halo behind the face
+    c.fillRect(2, 4, 12, 9);
+    pumpkinFace(c, '#ffe27a');                      // the carved face glows
+  },
+  prox_off: (c) => { proxBody(c); c.fillStyle = '#20242a'; c.fillRect(5, 7, 6, 2); },  // eye shut
+  prox_others: (c) => { proxBody(c); proxEye(c, '#ffd34d'); },   // yellow: watches others
+  prox_all: (c) => {
+    proxBody(c); proxEye(c, '#ff5340');             // red: watches EVERYONE
+    c.fillStyle = 'rgba(255,90,60,0.8)';            // warning ticks in the corners
+    c.fillRect(2, 2, 2, 1); c.fillRect(12, 2, 2, 1);
+    c.fillRect(2, 13, 2, 1); c.fillRect(12, 13, 2, 1);
   },
   tnt_side: (c) => {
     speckle(c, '#c0392b', 30, 16);                  // red body
@@ -300,6 +398,10 @@ const TILE_PAINTERS = {
     c.fillRect(12, 2, 1, 1); c.fillRect(13, 4, 1, 1); c.fillRect(11, 1, 1, 1);
   },
 };
+for (let i = 1; i <= ELEV_MAX; i++) {
+  TILE_PAINTERS[`elev_up_${i}`] = elevatorTile(i, true);
+  TILE_PAINTERS[`elev_side_${i}`] = elevatorTile(i, false);
+}
 
 // Build the atlas texture. Uses /static/textures/<name>.png when present (only
 // the names in `available`, so we never request a missing file), otherwise

@@ -108,7 +108,7 @@ To use **real** audio instead, drop files into `static/audio/` — `music.mp3`,
 present overrides the synthesized version. Free CC0 sources and details are in
 `static/audio/README.txt`.
 
-## Animals, inventory & crafting
+## Animals & inventory
 
 Friendly **pigs, sheep and cows** wander the grass near you (ambient — they
 don't fight or despawn your builds). They're client-side for now, so each player
@@ -116,10 +116,9 @@ sees their own; syncing them across multiplayer is a future step (`mobs.js`).
 
 Press **E** for the **inventory** — a picker for *every* block (including ones
 not on your hotbar). Click a block to load it into your currently-selected
-hotbar slot. It's **creative**: blocks never run out. The **✨ Craft** section
-combines two blocks into a special one (Mossy Cobble, Marble, Rainbow) — a fun,
-no-cost twist. Add blocks/recipes in `static/js/blocks.js` (`ALL_BLOCKS`,
-`CRAFT`).
+hotbar slot. It's **creative**: blocks never run out, and everything (including
+the specials like Mossy Cobble, Marble and Rainbow) is simply available — no
+crafting needed. Add blocks in `static/js/blocks.js` (`ALL_BLOCKS`).
 
 ## Blocks, TNT & Firestone
 
@@ -136,6 +135,22 @@ pumpkin, snow…). Three are special:
   night**, with a gentle flame-like flicker. Place a few to light up a build
   after dark; nearby blocks are lit by real warm point-lights that follow the
   closest glowstones to you.
+
+The Firestone strikes more than TNT (see `static/js/gear.js`):
+
+- **Pumpkins** — strike one and its carved face lights up like a
+  **jack-o'-lantern** (a real light source at night, like glowstone); strike it
+  again to snuff it out.
+- **Proximity Mine** — strikes cycle **off → watch others → watch EVERYONE →
+  off**. Arming takes **5 seconds** (walk away!); when a creature or player
+  wanders close it blinks for **2 seconds** — strike it in time to defuse, or
+  it explodes like TNT. Creatures caught in the blast are gone on the spot;
+  players get badly hurt. The yellow eye watches *other* players and animals;
+  the red eye watches **you too**.
+- **Elevators** — the **⬆ Up Elevator** floats straight up when you stand on
+  it, and the **➡ Side Elevator** glides the way you're facing. Strikes set the
+  travel distance **1–10** (shown right on the block; striking past 10 wraps to
+  1). Hop off and the block comes home and lands by itself.
 
 Explosion size lives in `static/js/engine/world.js` (`BLAST_RADIUS`); glow
 brightness/reach are `GLOW_LIGHT_POWER` / `GLOW_RANGE` in the same file.

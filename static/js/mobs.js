@@ -516,6 +516,16 @@ export class Mobs {
     return true;
   }
 
+  // An explosion at a block position: creatures caught in the blast die on the
+  // spot (their removal + reseed happens in the next update pass).
+  blastKill(x, y, z, r = 4.5) {
+    const c = new THREE.Vector3();
+    for (const m of this.mobs) {
+      m.center(c);
+      if (c.distanceTo({ x: x + 0.5, y: y + 0.5, z: z + 0.5 }) < r) m.hurt(9999);
+    }
+  }
+
   // A random grass surface a comfortable distance from the player, or null.
   _findLandSpot(playerPos) {
     const ang = Math.random() * Math.PI * 2;

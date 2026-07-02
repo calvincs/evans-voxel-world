@@ -67,6 +67,7 @@ export class Player {
     this.onHeal = null;          // callback(hp, maxHp) on regen tick
     this.onDeath = null;         // callback() when hp hits 0
     this.onPause = null;         // callback() when touch controls ask to pause
+    this.onStrike = null;        // callback(x,y,z,block) for Firestone strikes; true = handled
     this.lastDamage = null;      // what hit us last ('wolf', 'blast', …) for the death screen
     this.kb = new THREE.Vector3();  // knockback impulse, decays over time
     this.inWater = false;
@@ -446,8 +447,10 @@ export class Player {
     if (!r) return;
 
     const held = HOTBAR[this.selected];
-    if (held === FIRESTONE) {                  // light TNT instead of placing
-      if (this.world.getBlock(r.hit.x, r.hit.y, r.hit.z) === TNT) {
+    if (held === FIRESTONE) {                  // strike the target block
+      const b = this.world.getBlock(r.hit.x, r.hit.y, r.hit.z);
+      if (this.onStrike && this.onStrike(r.hit.x, r.hit.y, r.hit.z, b)) return;
+      if (b === TNT) {
         this.world.igniteTNT(r.hit.x, r.hit.y, r.hit.z);
       } else {
         audio.playIgnite();                    // just a spark

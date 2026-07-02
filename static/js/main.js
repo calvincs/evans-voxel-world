@@ -15,8 +15,9 @@ import { Net } from './net.js';
 import { RemotePlayers, playerColor, SELF_COLOR } from './remoteplayers.js';
 import { Voice } from './voice.js';
 import { Mobs } from './mobs.js';
+import { Gear } from './gear.js';
 import {
-  buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, CRAFT, ATLAS_COLS, TILE_PX, blockColor, WATER,
+  buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, ATLAS_COLS, TILE_PX, blockColor, WATER,
 } from './blocks.js';
 
 const $ = (id) => document.getElementById(id);
@@ -477,7 +478,9 @@ async function startGame(worldId, demo) {
     }
   };
   const blastFelt = (x, y, z) => { feltShake(x, y, z); blastHurt(x, y, z); };
-  world.onExplosion = (x, y, z) => blastFelt(x, y, z);
+  // Any local explosion (TNT or mine): shake + hurt the player, and creatures
+  // caught in the blast die outright. (mobs is defined just below.)
+  world.onExplosion = (x, y, z) => { blastFelt(x, y, z); mobs.blastKill(x, y, z); };
 
   if (isTouch) setupTouchControls(player);
   // Restore the player's customized hotbar (saved with their position).
@@ -532,6 +535,11 @@ async function startGame(worldId, demo) {
 
   // Multiplayer: stream our position and apply others' edits + movements.
   const remotes = new RemotePlayers(scene);
+
+  // Contraption blocks: jack-o'-lanterns, proximity mines, elevators. The
+  // Firestone routes strikes here first; TNT stays with player/world.
+  const gear = new Gear(world, player, mobs, remotes, atlas.image, (m) => toast(m, 2500));
+  player.onStrike = (x, y, z, b) => gear.strike(x, y, z, b);
   const myName = currentUser ? currentUser.name : 'Player';
   const roster = new Map();       // id -> { name }
   const voiceIds = new Set();     // ids currently in voice
@@ -576,6 +584,7 @@ async function startGame(worldId, demo) {
         audio.playExplosion({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
         world._spawnParticles(m.x, m.y, m.z);
         blastFelt(m.x, m.y, m.z);
+        mobs.blastKill(m.x, m.y, m.z);   // remote blasts kill our creatures too
       } else if (m.kind === 'ignite') {
         audio.playIgnite({ x: m.x + 0.5, y: m.y + 0.5, z: m.z + 0.5 });
       }
@@ -707,7 +716,7 @@ async function startGame(worldId, demo) {
     updateVoiceButton();
   }
 
-  window.game = { world, player, sky, remotes, net, voice, mobs };
+  window.game = { world, player, sky, remotes, net, voice, mobs, gear };
 
   // Swap the menu for the play screen.
   $('menu').classList.add('hidden');
@@ -750,24 +759,6 @@ async function startGame(worldId, demo) {
       item.appendChild(cv);
       item.addEventListener('click', () => pickBlock(block));
       grid.appendChild(item);
-    }
-    const craft = $('inv-craft'); craft.innerHTML = '';
-    for (const r of CRAFT) {
-      const item = document.createElement('div');
-      item.className = 'craft-item'; item.title = 'Make ' + BLOCKS[r.out].name;
-      const out = document.createElement('canvas'); out.width = out.height = 34;
-      drawBlockIcon(out, atlasImg, r.out, 34); item.appendChild(out);
-      const nm = document.createElement('div'); nm.className = 'craft-name';
-      nm.textContent = BLOCKS[r.out].name; item.appendChild(nm);
-      const rec = document.createElement('div'); rec.className = 'craft-recipe';
-      r.inputs.forEach((inb, idx) => {
-        const ic = document.createElement('canvas'); ic.width = ic.height = 16;
-        drawBlockIcon(ic, atlasImg, inb, 16); rec.appendChild(ic);
-        if (idx < r.inputs.length - 1) { const p = document.createElement('span'); p.textContent = '+'; rec.appendChild(p); }
-      });
-      item.appendChild(rec);
-      item.addEventListener('click', () => pickBlock(r.out));
-      craft.appendChild(item);
     }
   }
   function pickBlock(block) {
@@ -847,6 +838,7 @@ async function startGame(worldId, demo) {
     sky.update(dt, player.pos);
     world.update(player.pos.x, player.pos.z, dt, sky.daylight);
     mobs.update(dt, player, sky.daylight);
+    gear.update(dt);                  // mines + elevators (after player & mobs)
 
     // Multiplayer sync.
     if (player.locked) net.sendPos(player.posState(), performance.now());
