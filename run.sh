@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start EvansGame. Creates a local virtualenv on first run, installs deps,
-# then launches the server. Open http://localhost:8000 in a browser.
+# then launches the server. Open https://localhost:8765 in a browser.
 set -e
 cd "$(dirname "$0")"
 

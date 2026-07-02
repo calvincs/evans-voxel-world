@@ -11,10 +11,13 @@ block editing.
 ./run.sh
 ```
 
-Then open **http://localhost:8000** and click to play.
+Then open **https://localhost:8765** and click to play (HTTPS with a
+self-signed certificate is the default — accept the one-time warning).
 
 (First launch makes a virtualenv and installs FastAPI + uvicorn — takes a few
 seconds. After that it starts instantly.)
+
+What changed lately? See **CHANGELOG.md**.
 
 ## Controls
 
@@ -29,7 +32,8 @@ seconds. After that it starts instantly.)
 | `1`–`8` / scroll | choose a hotbar block |
 | `E` | inventory (pick any block) |
 | `V` | first / third-person view |
-| `M` | music on/off |
+| `N` / tap the map | resize / hide the minimap |
+| `M` | sound on/off (music **and** effects; voice chat stays on) |
 | `🎙️` / hold `T` | join voice / talk |
 | `Esc` | pause |
 
@@ -64,6 +68,20 @@ plaintext, no extra libraries), and login sessions are cookies stored in
 `data/sessions.json`. From the menu you can open **⚙ Profile** to change your
 display name, pick your character color, or set a new password. Only you (while
 signed in) can edit your own profile.
+
+**Forgot a password?** On the machine that hosts the game, run
+`tools/reset_password.py <username>` — it resets the account live (or edits
+the file directly if the server is down). The reset endpoint only accepts
+requests from the host machine itself, never from the LAN.
+
+### Backups & running as a service
+
+- `tools/backup.sh` tars `data/` (worlds, accounts, snapshots) into `backups/`
+  and keeps the newest 14. Snapshots protect against bad edits; backups protect
+  against the disk dying — add one cron line to make it nightly, and point
+  `EVANS_BACKUP_DIR` at another drive if you can.
+- `tools/evansgame.service` is a systemd user unit that starts the game on
+  boot and restarts it after a crash — install instructions inside the file.
 
 ### Worlds
 
@@ -101,7 +119,10 @@ This is how AI-generated art can be dropped in. See `tools/gen_assets.py`.
 
 Music and sound effects are **synthesized in the browser** (WebAudio), so the
 game has sound with no files and works offline. A calm generative tune plays in
-the background (toggle with the 🔊 button), plus break / place / footstep SFX.
+the background — it drops lower and quieter after dark — plus break / place /
+footstep SFX and a living ambience (wind, birdsong by day, crickets at night).
+The 🔊 button (or `M`) mutes **everything** — music, effects, growls — except
+voice chat, and remembers the choice across reloads.
 
 To use **real** audio instead, drop files into `static/audio/` — `music.mp3`,
 `break.wav`, `place.wav`, `step.wav` (`.mp3`/`.ogg`/`.wav` all work). Anything
@@ -111,8 +132,18 @@ present overrides the synthesized version. Free CC0 sources and details are in
 ## Animals & inventory
 
 Friendly **pigs, sheep and cows** wander the grass near you (ambient — they
-don't fight or despawn your builds). They're client-side for now, so each player
-sees their own; syncing them across multiplayer is a future step (`mobs.js`).
+don't fight or despawn your builds), and **wolves, spiders and squid** add a
+little night-time danger — the owner's 🕊️ **Peaceful** toggle (world menu or
+pause screen) turns it off instantly. Villagers wander their village; give one
+a poke and they'll say something. Survive a real night and dawn counts it for
+you ("🌅 Night 12 survived!"). Creatures are client-side for now, so each
+player sees their own; syncing them across multiplayer is a future step
+(`mobs.js`).
+
+A round **minimap** sits in the top-right corner — you're the white arrow at
+the centre, the orange ring is the village, and friends show as coloured dots.
+It rotates with you, so up is always the way you're facing. Tap it (or press
+`N`) to cycle big → small → hidden.
 
 Press **E** for the **inventory** — a picker for *every* block (including ones
 not on your hotbar). Click a block to load it into your currently-selected
@@ -142,11 +173,11 @@ The Firestone strikes more than TNT (see `static/js/gear.js`):
   **jack-o'-lantern** (a real light source at night, like glowstone); strike it
   again to snuff it out.
 - **Proximity Mine** — strikes cycle **off → watch others → watch EVERYONE →
-  off**. Arming takes **5 seconds** (walk away!); when a creature or player
-  wanders close it blinks for **2 seconds** — strike it in time to defuse, or
-  it explodes like TNT. Creatures caught in the blast are gone on the spot;
-  players get badly hurt. The yellow eye watches *other* players and animals;
-  the red eye watches **you too**.
+  off**. Arming takes **5 seconds** (walk away!); once live, anything that
+  wanders close sets it off **instantly** — half the crater of TNT, but the
+  same lethal blast. Creatures caught in it are gone on the spot; players get
+  badly hurt. The yellow eye watches *other* players and animals; the red eye
+  watches **you too** — a mine never fires on the player who armed it.
 - **Elevators** — the **Up Elevator** (steel-blue) floats straight up when you
   stand on it; the **Side Elevator** (tan) glides sideways. Strikes set the
   travel distance **1–10**, shown right on the block, and the **11th strike
@@ -197,9 +228,10 @@ warning. To run plain HTTP instead (no voice for other devices), use
 `EVANS_HTTP=1 ./run.sh`. To use your own cert, set `EVANS_SSL_CERT` /
 `EVANS_SSL_KEY`.
 
-> Running a **second** server instance? Point it at a different data folder with
-> `EVANS_WORLDS_DIR=/some/dir ./run.sh` so the two don't fight over the same
-> world files.
+> Running a **second** server instance? Point it at a completely separate data
+> root with `EVANS_DATA_DIR=/some/dir ./run.sh` so the two don't fight over the
+> same files. (Don't use `EVANS_WORLDS_DIR` for this — it moves only the worlds,
+> leaving accounts, sessions and snapshots shared between the two instances.)
 
 ## Tuning
 

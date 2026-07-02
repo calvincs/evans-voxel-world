@@ -4,6 +4,18 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Docs match reality
+
+- README/run.sh said the game runs at `http://localhost:8000`; it's
+  `https://localhost:8765` (HTTPS by default).
+- README still promised the removed 2-second mine defuse window; mines trip
+  instantly now, and the text says so.
+- The second-instance advice now recommends `EVANS_DATA_DIR` (full isolation)
+  instead of `EVANS_WORLDS_DIR`, which silently shared accounts/sessions/
+  snapshots between instances.
+- New sections: password rescue, backups & systemd service, minimap,
+  Peaceful toggle, ambience/master-mute, night counter, villager chatter.
+
 ## 2026-07-02 — A world that sounds alive
 
 **Why:** the game had music and effect sounds but no *atmosphere* — and no
