@@ -140,6 +140,16 @@ def main():
             "document.getElementById('music').textContent + localStorage.getItem('evans-sound')")
             == "🔊1")
 
+        # --- B2: peaceful toggle on the pause screen (guest owns the demo world)
+        check("peaceful button visible for the owner", page.eval(
+            "!document.getElementById('peaceful').classList.contains('hidden')") is True)
+        page.eval("document.getElementById('peaceful').click()")
+        page.wait_for("window.game.mobs.peaceful === true", 10, "peaceful applied live")
+        check("peaceful applies live without reload", True)
+        page.eval("document.getElementById('peaceful').click()")
+        page.wait_for("window.game.mobs.peaceful === false", 10, "peaceful off again")
+        check("peaceful toggles back off", True)
+
         # --- C: bogus world -> visible error panel, not a dead menu ------------
         # (navigate the same page; headless Chrome doesn't open real popups)
         page.eval(f"location.href = 'http://localhost:{PORT}/?demo&w=w_bogus00'")

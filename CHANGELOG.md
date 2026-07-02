@@ -4,6 +4,18 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Peaceful is one tap away, in-game
+
+**Why:** night interrupts building every few minutes, and the only escape
+hatch (the Peaceful toggle) was buried on the world menu — you had to quit
+the game to reach it.
+
+**What changed (`static/index.html`, `static/js/main.js`):**
+- The pause screen (Esc / ⏸) now has the owner's 🕊️/⚔️ Peaceful toggle. It
+  applies instantly — hostiles calm down without a reload. Other players in
+  the world pick it up on their next join.
+- Smoke test grew to 11 checks (peaceful toggle exercised in a real browser).
+
 ## 2026-07-02 — No more silent failures on the menu, and a mute that mutes
 
 **Why (menu):** if loading a world failed, the error only went to the console —

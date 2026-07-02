@@ -773,6 +773,34 @@ async function startGame(worldId, demo) {
   $('title').textContent = cfg.name;
   overlay.classList.remove('hidden');
 
+  // Owner-only Peaceful toggle on the pause screen — turning off a scary night
+  // shouldn't require quitting to the world menu. Applies immediately (mobs
+  // read the flag every update); other players pick it up on their next join.
+  const peaBtn = $('peaceful');
+  if (cfg.mine) {
+    let peaceful = !!cfg.peaceful;
+    const renderPea = () => {
+      peaBtn.textContent = peaceful ? '🕊️ Peaceful: ON' : '⚔️ Peaceful: OFF';
+      peaBtn.title = peaceful
+        ? 'Everyone is friendly. Tap to bring back night-time danger.'
+        : 'Wolves & spiders can attack at night. Tap to make everyone friendly.';
+    };
+    renderPea();
+    peaBtn.classList.remove('hidden');
+    peaBtn.onclick = async (e) => {
+      e.stopPropagation();
+      const { ok } = await req('POST', `/api/worlds/${worldId}/peaceful`, { peaceful: !peaceful });
+      if (!ok) { toast("Couldn't change Peaceful — try again.", 2500); return; }
+      peaceful = !peaceful;
+      mobs.peaceful = peaceful;
+      renderPea();
+      toast(peaceful ? '🕊️ Peaceful is ON — everyone is friendly now.'
+        : '⚔️ Peaceful is OFF — watch out at night!', 3000);
+    };
+  } else {
+    peaBtn.classList.add('hidden');
+  }
+
   // Owner-only "Snapshots" button on the pause screen (rewind this world).
   const snapBtn = $('snapshots');
   if (cfg.mine) {
