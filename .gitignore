@@ -27,3 +27,6 @@ static/audio/*.mp3
 
 # Local save-data backups (tools/backup.sh)
 /backups/
+
+# Screenshot dropped by tools/test_village.py
+/village.png

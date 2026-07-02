@@ -4,6 +4,34 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Smoother frames while building
+
+**Why:** three measurable stutter sources. (1) The mine "adoption" scan read
+~23,000 blocks in a single frame, every second, in every world — even with no
+mines anywhere: a metronomic hitch. (2) Breaching a dam applied up to 4096
+water edits in one frame: one big hitch at the most fun moment. (3) Every
+block read built a lookup string — thousands of throwaway allocations per
+frame under collision, mob AI and camera probes.
+
+**What changed:**
+- Mine blocks are now indexed as chunks load/edit (same pattern as glowstone
+  lights), so the adoption pass checks a handful of known positions instead
+  of scanning a volume (`static/js/engine/world.js`, `static/js/gear.js`).
+- Water flood-fills drain ~300 cells per frame — the water visibly rushes in
+  over a few frames instead of hitching one; the result is still persisted
+  and relayed as one batch.
+- `getBlock` remembers the last chunk it touched (voxel reads are extremely
+  local), skipping the string-key Map lookup on nearly every call.
+- Stability: the day/night clock is now derived from the server-anchored wall
+  clock every frame — a backgrounded tab used to come back minutes behind,
+  with its wolves out of sync with everyone else's. And after a reconnect,
+  refetched chunks that didn't change are no longer remeshed (a Wi-Fi blip
+  used to cost seconds of rebuilding identical geometry).
+- New `tools/run_game_tests.sh` — runs the whole headless gameplay suite
+  (mob AI, mines, mine ownership, village) plus the UI smoke test against an
+  isolated server. Note: `test_mob_ai`'s wall-doorway scenario was already
+  failing before this change (verified via stash) — fix tracked separately.
+
 ## 2026-07-02 — The inventory shows what you're doing
 
 **Why:** block names lived only in hover tooltips (invisible on a tablet), and

@@ -30,6 +30,13 @@ export class World {
     this.net = null;          // set in multiplayer; edits go over the socket
     this._retryAt = new Map();   // failed chunk fetches back off instead of hammering
     this._gen = 0;               // bumped by clearAll so stale fetches get discarded
+    // Voxel reads are extremely local (collision, mob AI, camera probes hit the
+    // same chunk dozens of times in a row), so remember the last chunk touched
+    // and skip the key-string + Map lookup when the next read lands in it.
+    this._lastChunk = null;
+    // Active water flood-fills, drained a slice per frame — a breached dam
+    // fills over a few frames instead of hitching one (see _updateFloods).
+    this._floods = [];
 
     // Ring of chunk offsets inside the render distance, sorted nearest-first.
     // Computed once — the per-frame streaming scan reuses it.
@@ -83,6 +90,7 @@ export class World {
     // active light count, so toggling visibility forces program recompiles —
     // a burst of frame hitches right at nightfall.
     this.glow = new Map();       // "x,y,z" -> [gx, gy, gz] for every loaded glowstone
+    this.prox = new Map();       // "x,y,z" -> [x, y, z] for every loaded mine block
     this._glowT = 0;
     this._glowAssignT = 1;       // force an assignment on the first night frame
     this._glowDirty = true;
@@ -128,7 +136,11 @@ export class World {
     if (wy < 0) return STONE;
     if (wy >= DIM.WY) return AIR;
     const cx = floorDiv(wx, DIM.CX), cz = floorDiv(wz, DIM.CZ);
-    const chunk = this.chunks.get(key(cx, cz));
+    let chunk = this._lastChunk;
+    if (!chunk || chunk.cx !== cx || chunk.cz !== cz) {
+      chunk = this.chunks.get(key(cx, cz));
+      if (chunk) this._lastChunk = chunk;
+    }
     if (!chunk) return AIR;
     return chunk.getLocal(wx - cx * DIM.CX, wy, wz - cz * DIM.CZ);
   }
@@ -148,6 +160,10 @@ export class World {
     const gk = `${wx},${wy},${wz}`;
     if (isGlow(block)) { this.glow.set(gk, [wx, wy, wz]); this._glowDirty = true; }
     else if (isGlow(prev)) { this.glow.delete(gk); this._glowDirty = true; }
+    // Same for proximity mines: gear's orphan-adoption reads this index instead
+    // of volume-scanning thousands of blocks around the player every second.
+    if (isProx(block)) this.prox.set(gk, [wx, wy, wz]);
+    else if (isProx(prev)) this.prox.delete(gk);
 
     this._markDirty(cx, cz);
     if (lx === 0) this._markDirty(cx - 1, cz);
@@ -174,9 +190,10 @@ export class World {
 
   // Still water fills a fresh gap that opens below sea level and touches water.
   // Not a flow simulation — it doesn't animate or level out; it just makes any
-  // connected air region that "should" be underwater become water. Flood-fills
-  // within loaded chunks (bounded), then persists + relays the fill in one
-  // batch. Triggered by a local break; other clients just receive the batch.
+  // connected air region that "should" be underwater become water. The fill is
+  // drained a slice per frame (_updateFloods) within loaded chunks (bounded),
+  // then persisted + relayed in one batch. Triggered by a local break; other
+  // clients just receive the batch.
   _floodWater(sx, sy, sz) {
     const WL = DIM.water;
     const N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -186,34 +203,51 @@ export class World {
     for (const [dx, dy, dz] of N)
       if (this.getBlock(sx + dx, sy + dy, sz + dz) === WATER) { touches = true; break; }
     if (!touches) return;
+    const sk = `${sx},${sy},${sz}`;
+    for (const f of this._floods)
+      if (f.seen.has(sk)) return;                   // an active fill already covers it
+    this._floods.push({
+      seen: new Set([sk]), queue: [[sx, sy, sz]], qi: 0, filled: [], cap: 4096 });
+  }
 
-    const CAP = 4096;
-    const seen = new Set([`${sx},${sy},${sz}`]);
-    const queue = [[sx, sy, sz]];
-    const filled = [];
-    let qi = 0;                                     // index pointer: shift() is O(n)
-    while (qi < queue.length && filled.length < CAP) {
-      const [x, y, z] = queue[qi++];
-      this.setBlock(x, y, z, WATER, false);         // local only; batch-sent below
-      filled.push({ x, y, z, block: WATER });
-      for (const [dx, dy, dz] of N) {
-        const nx = x + dx, ny = y + dy, nz = z + dz;
-        if (ny > WL) continue;                       // never rise above sea level
-        const k = `${nx},${ny},${nz}`;
-        if (seen.has(k)) continue;
-        // Stay inside loaded chunks so we never write into ungenerated terrain.
-        if (!this.chunks.has(key(floorDiv(nx, DIM.CX), floorDiv(nz, DIM.CZ)))) continue;
-        if (this.getBlock(nx, ny, nz) !== AIR) continue;
-        seen.add(k);
-        queue.push([nx, ny, nz]);                    // adjacent to the cell we just filled
+  // Drain active flood-fills a slice per frame. Breaching a big dam used to
+  // apply up to 4096 edits in one synchronous frame — one visible hitch; now
+  // the water visibly rushes in over a few frames instead.
+  _updateFloods() {
+    if (!this._floods.length) return;
+    const N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    const WL = DIM.water;
+    let budget = 300;                                // cells per frame, total
+    for (let fi = this._floods.length - 1; fi >= 0 && budget > 0; fi--) {
+      const f = this._floods[fi];
+      while (f.qi < f.queue.length && f.filled.length < f.cap && budget > 0) {
+        budget--;
+        const [x, y, z] = f.queue[f.qi++];
+        if (this.getBlock(x, y, z) !== AIR) continue;   // changed since queued
+        this.setBlock(x, y, z, WATER, false);           // local; batch-sent below
+        f.filled.push({ x, y, z, block: WATER });
+        for (const [dx, dy, dz] of N) {
+          const nx = x + dx, ny = y + dy, nz = z + dz;
+          if (ny > WL) continue;                        // never rise above sea level
+          const k = `${nx},${ny},${nz}`;
+          if (f.seen.has(k)) continue;
+          // Stay inside loaded chunks so we never write into ungenerated terrain.
+          if (!this.chunks.has(key(floorDiv(nx, DIM.CX), floorDiv(nz, DIM.CZ)))) continue;
+          if (this.getBlock(nx, ny, nz) !== AIR) continue;
+          f.seen.add(k);
+          f.queue.push([nx, ny, nz]);
+        }
+      }
+      if (f.qi >= f.queue.length || f.filled.length >= f.cap) {
+        this._floods.splice(fi, 1);
+        if (!f.filled.length) continue;
+        if (this.net && this.net.connected) this.net.sendEdits(f.filled);
+        else fetch(`${this.base}/edits`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ edits: f.filled }),
+        }).catch(() => {});
       }
     }
-    if (!filled.length) return;
-    if (this.net && this.net.connected) this.net.sendEdits(filled);
-    else fetch(`${this.base}/edits`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ edits: filled }),
-    }).catch(() => {});
   }
 
   _markDirty(cx, cz) {
@@ -238,7 +272,7 @@ export class World {
       if (gen !== this._gen) return;        // world was reset while this was in flight
       this._retryAt.delete(k);
       this.chunks.set(k, new Chunk(cx, cz, data));
-      this._scanGlow(cx, cz, data, true);   // index any glowstones in this chunk
+      this._indexChunk(cx, cz, data, true);   // index glowstones + mine blocks
       // Neighbours can now cull their shared border faces.
       this._markDirty(cx - 1, cz); this._markDirty(cx + 1, cz);
       this._markDirty(cx, cz - 1); this._markDirty(cx, cz + 1);
@@ -265,9 +299,17 @@ export class World {
       const data = new Uint8Array(await res.arrayBuffer());
       if (data.length !== chunk.data.length || gen !== this._gen) return;
       if (!this.chunks.has(key(chunk.cx, chunk.cz))) return;   // evicted meanwhile
-      this._scanGlow(chunk.cx, chunk.cz, chunk.data, false);
+      // Unchanged bytes = nothing was missed for this chunk — skip the
+      // re-index and the remesh. Reconnects refetch EVERY loaded chunk, so
+      // without this a Wi-Fi blip cost seconds of rebuilding identical meshes.
+      let same = true;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] !== chunk.data[i]) { same = false; break; }
+      }
+      if (same) return;
+      this._indexChunk(chunk.cx, chunk.cz, chunk.data, false);
       chunk.data = data;
-      this._scanGlow(chunk.cx, chunk.cz, data, true);
+      this._indexChunk(chunk.cx, chunk.cz, data, true);
       chunk.dirty = true;
     } catch (_) { /* still offline — the health monitor owns that state */ }
   }
@@ -280,6 +322,7 @@ export class World {
     const ws = this.materials.water.userData.shader;
     if (ws) ws.uniforms.uTime.value = this._time;
     this._updateEffects(dt);
+    this._updateFloods();
     this._updateGlow(daylight, dt);
     const ccx = floorDiv(px, DIM.CX), ccz = floorDiv(pz, DIM.CZ);
 
@@ -303,9 +346,10 @@ export class World {
       const keep = RENDER_DISTANCE + 1;
       for (const [k, chunk] of this.chunks) {
         if (Math.abs(chunk.cx - ccx) > keep || Math.abs(chunk.cz - ccz) > keep) {
-          this._scanGlow(chunk.cx, chunk.cz, chunk.data, false);  // un-index glowstones
+          this._indexChunk(chunk.cx, chunk.cz, chunk.data, false);  // un-index specials
           chunk.dispose(this);
           this.chunks.delete(k);
+          if (this._lastChunk === chunk) this._lastChunk = null;
         }
       }
     }
@@ -339,8 +383,11 @@ export class World {
     this._gen++;                 // in-flight fetches from the old world are stale now
     for (const chunk of this.chunks.values()) chunk.dispose(this);
     this.chunks.clear();
+    this._lastChunk = null;
     this.pending.clear();
     this._retryAt.clear();
+    this.prox.clear();
+    this._floods = [];
     for (const f of this.fuses) this.scene.remove(f.mesh);
     for (const p of this.particles) {
       this.scene.remove(p.points);
@@ -354,19 +401,28 @@ export class World {
     for (const L of this.glowLights) L.intensity = 0;
   }
 
-  // --- Glowstone lighting ---------------------------------------------------
-  // Add/remove every glowstone in a chunk's data to/from the light index.
-  _scanGlow(cx, cz, data, add) {
+  // --- Block indexes (glowstone lights, proximity mines) ---------------------
+  // Add/remove a chunk's special blocks to/from the position indexes — one
+  // pass over the data covers both glowing blocks and mine blocks.
+  _indexChunk(cx, cz, data, add) {
     const { CX, CZ } = DIM;
     for (let i = 0; i < data.length; i++) {
-      if (!isGlow(data[i])) continue;
+      const b = data[i];
+      const g = isGlow(b), p = isProx(b);
+      if (!g && !p) continue;
       const x = i % CX;
       const z = Math.floor(i / CX) % CZ;
       const y = Math.floor(i / (CX * CZ));
-      const gx = cx * CX + x, gz = cz * CZ + z;
-      const k = `${gx},${y},${gz}`;
-      if (add) this.glow.set(k, [gx, y, gz]); else this.glow.delete(k);
-      this._glowDirty = true;
+      const wx = cx * CX + x, wz = cz * CZ + z;
+      const k = `${wx},${y},${wz}`;
+      if (g) {
+        if (add) this.glow.set(k, [wx, y, wz]); else this.glow.delete(k);
+        this._glowDirty = true;
+      } else if (add) {
+        this.prox.set(k, [wx, y, wz]);
+      } else {
+        this.prox.delete(k);
+      }
     }
   }
 

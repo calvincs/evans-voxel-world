@@ -23,7 +23,6 @@
 
 import * as THREE from 'three';
 import * as audio from './audio.js';
-import { DIM } from './engine/constants.js';
 import {
   AIR, PUMPKIN, PUMPKIN_LIT, PROX_OFF, PROX_OTHERS, PROX_ALL,
   ELEV_UP, ELEV_SIDE, ELEV_DOWN, ELEV_SIDE_REV, ELEV_SIDE_R, ELEV_SIDE_L,
@@ -112,21 +111,22 @@ export class Gear {
   // (or its still-arming owner, in multiplayer) are spotted next to it.
   // (Two clients may both sense the same mine; the fuse dedup and the block
   // vanishing with the first crater keep a rare double boom harmless.)
+  // Candidates come from the world's mine-block index — this used to volume-
+  // scan ~23k blocks around the player every second, a metronomic stutter.
   _adoptOrphanMines(dt) {
     this._adoptT -= dt;
     if (this._adoptT > 0) return;
     this._adoptT = MINE_ADOPT_T;
+    if (this.world.prox.size === 0) return;          // no mines anywhere loaded
     const p = this.player.pos;
-    const px = Math.floor(p.x), py = Math.floor(p.y), pz = Math.floor(p.z);
-    const y0 = Math.max(0, py - 10), y1 = Math.min(DIM.WY - 1, py + 10);
-    for (let x = px - MINE_ADOPT_R; x <= px + MINE_ADOPT_R; x++)
-      for (let z = pz - MINE_ADOPT_R; z <= pz + MINE_ADOPT_R; z++)
-        for (let y = y0; y <= y1; y++) {
-          const b = this.world.getBlock(x, y, z);
-          if ((b === PROX_OTHERS || b === PROX_ALL) && !this.mines.has(key(x, y, z))) {
-            this._armMine(key(x, y, z), x, y, z, true);
-          }
-        }
+    for (const [x, y, z] of this.world.prox.values()) {
+      if (Math.abs(x - p.x) > MINE_ADOPT_R || Math.abs(z - p.z) > MINE_ADOPT_R
+          || Math.abs(y - p.y) > 10) continue;
+      const k = key(x, y, z);
+      if (this.mines.has(k)) continue;
+      const b = this.world.getBlock(x, y, z);        // index holds OFF mines too
+      if (b === PROX_OTHERS || b === PROX_ALL) this._armMine(k, x, y, z, true);
+    }
   }
 
   // --- Firestone strikes ------------------------------------------------------

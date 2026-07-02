@@ -22,6 +22,7 @@ export class Sky {
     this.dayLength = dayLength;
     this.time = 0.30;             // 0..1; start mid-morning
     this.daylight = 1;            // 0 night .. 1 full day (read by the glow system)
+    this._clockOffset = null;     // server-time anchor; null = free-running
     this._col = new THREE.Color();
 
     this.hemi = new THREE.HemisphereLight(0xcfe6ff, 0x40503a, 1.0);
@@ -76,11 +77,21 @@ export class Sky {
   // Anchor the day/night phase to a shared wall clock (the server's), so every
   // player in a world sees the same time of day — and the same spiders.
   syncTo(unixSeconds) {
-    this.time = ((unixSeconds / this.dayLength) + 0.30) % 1;
+    this._clockOffset = unixSeconds - Date.now() / 1000;
+    this.time = this._timeFromClock();
+  }
+
+  _timeFromClock() {
+    const now = Date.now() / 1000 + this._clockOffset;
+    return ((now / this.dayLength) + 0.30) % 1;
   }
 
   update(dt, playerPos) {
-    this.time = (this.time + dt / this.dayLength) % 1;
+    // Derive time from the anchored clock every frame rather than integrating
+    // dt: rAF pauses in background tabs, and an integrated clock came back
+    // minutes behind — one kid's wolves hunting while the other's dozed.
+    if (this._clockOffset !== null) this.time = this._timeFromClock();
+    else this.time = (this.time + dt / this.dayLength) % 1;
     const phase = this.time * Math.PI * 2;
     const sunHeight = -Math.cos(phase);       // -1 midnight .. +1 noon
     const sx = Math.sin(phase);
