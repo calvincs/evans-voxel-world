@@ -589,8 +589,6 @@ async function startGame(worldId, demo) {
   const gear = new Gear(world, player, mobs, remotes, atlas.image, (m) => toast(m, 3500));
   // Corner minimap: you at the centre, village ring, friends + creatures as dots.
   const minimap = new MiniMap(world, player, remotes, mobs, $('minimap'), cfg.village);
-  gear.myName = currentUser ? currentUser.name : '';      // mines spare their owner
-  gear.setOwners(cfg.mines);                              // ...across reloads too
   player.onStrike = (x, y, z, b) => gear.strike(x, y, z, b);
   const myName = currentUser ? currentUser.name : 'Player';
   const roster = new Map();       // id -> { name }
@@ -635,11 +633,9 @@ async function startGame(worldId, demo) {
         world.setBlock(m.x, m.y, m.z, m.block, false);
         audio.playPlace(pos);
       }
-      gear.noteEdit(m.x, m.y, m.z, m.block, m.owner);    // track mine ownership
     },
     onEdits: (edits) => edits.forEach((e) => {
       world.setBlock(e.x, e.y, e.z, e.block, false);
-      gear.noteEdit(e.x, e.y, e.z, e.block);             // craters retire mines
     }),
     onFx: (m) => {
       if (m.kind === 'explode') {
@@ -655,6 +651,9 @@ async function startGame(worldId, demo) {
     // --- Creatures (simulated on the SERVER; we render its stream) -----------
     onMobs: (list) => mobs.applySnapshot(list),
     onMobDie: (m) => mobs.onDeath(m.x, m.y, m.z, m.t),
+    // The server's mine watch says one tripped — we're the client chosen to
+    // run the explosion (crater + chains, exactly like our own TNT).
+    onMineTrip: (m) => world.igniteTNT(m.x, m.y, m.z, 0),
     onNotice: (msg) => toast(String(msg).slice(0, 200), 3500),
     onMobBite: (m) => {
       if (!dead) player.hurt(m.amount, { from: { x: m.x, z: m.z }, source: m.source });
@@ -1063,8 +1062,11 @@ async function startGame(worldId, demo) {
     const dt = Math.min((now - lastFrame) / 1000, 0.5);
     lastFrame = now;
     sky.update(dt, player.pos);                 // wall-clock anchored; daylight stays true
+    world._updateEffects(dt);                   // fuses + server mine-trips still detonate
+    world._updateFloods();
+    world._updateSettles();
     mobs.update(dt);
-    gear.update(dt);                            // mines keep watching too
+    gear.update(dt);
   }, 250);
 }
 

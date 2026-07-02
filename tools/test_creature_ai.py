@@ -85,6 +85,7 @@ def make_sim(village=None):
     import itertools
     sim._wild_n = itertools.count(1)
     sim.dirty = False
+    sim.mine_live = {}
     return sim
 
 
@@ -259,9 +260,54 @@ def scenario_bites():
           any(e["c"] for e in sim.snapshot()))
 
 
+def scenario_mines():
+    import time as _t
+    sim = make_sim()
+    platform(sim.view, 0, 0, 12, 5, PY)
+    key = f"5,{PY + 1},2"
+    sim.view.set(5, PY + 1, 2, 26)                 # armed for OTHERS
+    mines = {key: "Evan"}
+    now = _t.monotonic()
+    owner = {"pid": 1, "name": "Evan", "x": 6.5, "y": PY + 1, "z": 2.5}
+    other = {"pid": 2, "name": "Bob", "x": 6.5, "y": PY + 1, "z": 2.5}
+
+    # A key the sim has never seen = armed in an earlier session -> live NOW.
+    check("pre-armed mine never fires on its owner",
+          sim.mines_tick(mines, [owner], now) == [])
+    check("...but is live immediately for anyone else",
+          sim.mines_tick(mines, [other], now) == [(5, PY + 1, 2)])
+
+    # Freshly armed mines honour the delay.
+    sim.view.set(5, PY + 1, 2, 26)
+    sim.mine_armed(key)
+    t0 = _t.monotonic()
+    check("fresh arm: not live during the delay",
+          sim.mines_tick(mines, [other], t0) == [])
+    check("fresh arm: live after the delay",
+          sim.mines_tick(mines, [other], t0 + 6) == [(5, PY + 1, 2)])
+
+    # PROX_ALL counts the owner too; creatures always count.
+    sim.view.set(5, PY + 1, 2, 27)
+    check("EVERYONE mine fires on its owner",
+          sim.mines_tick(mines, [owner], now) == [(5, PY + 1, 2)])
+    sim.view.set(5, PY + 1, 2, 26)
+    sim.mine_live.pop(key, None)
+    pig = Creature("w9", "pig", 4.5, PY + 1, 2.5)  # 1 block from the mine
+    sim.creatures["w9"] = pig
+    check("a creature trips it even with only the owner around",
+          sim.mines_tick(mines, [owner], now) == [(5, PY + 1, 2)])
+    sim.creatures.clear()
+
+    # Defused (block changed) -> silently dropped.
+    sim.view.set(5, PY + 1, 2, 25)
+    check("defused mine never trips",
+          sim.mines_tick(mines, [other], now) == [] and key not in sim.mine_live)
+
+
 def main():
     for fn in (scenario_pit, scenario_wall, scenario_squid, scenario_flee,
-               scenario_temperament, scenario_eggs, scenario_bites):
+               scenario_temperament, scenario_eggs, scenario_bites,
+               scenario_mines):
         print(f"--- {fn.__name__} ---")
         fn()
     print(f"\nall {PASS} checks passed")

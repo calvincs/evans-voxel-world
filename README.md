@@ -194,7 +194,10 @@ The Firestone strikes more than TNT (see `static/js/gear.js`):
   wanders close sets it off **instantly** — half the crater of TNT, but the
   same lethal blast. Creatures caught in it are gone on the spot; players get
   badly hurt. The yellow eye watches *other* players and animals; the red eye
-  watches **you too** — a mine never fires on the player who armed it.
+  watches **you too** — a mine never fires on the player who armed it. Mines
+  are watched by the **server**: once live they stay live — leave, come back
+  tomorrow, or let a friend wander in first — and they still remember whose
+  they are.
 - **Elevators** — the **Up Elevator** (steel-blue) floats straight up when you
   stand on it; the **Side Elevator** (tan) glides sideways. Strikes set the
   travel distance **1–10**, shown right on the block, and the **11th strike

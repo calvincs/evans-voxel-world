@@ -15,11 +15,13 @@
 //      step off and it comes home and lands.
 //
 // State changes are ordinary block swaps (persisted + relayed), so friends see
-// mine modes and elevator counts. Timers and platform motion run only on the
-// client that struck/rode the block, mirroring how TNT fuses work — except
-// that armed mine blocks nobody is watching (after a reload, or a friend's)
-// get adopted by whichever client comes near, so a minefield keeps working
-// across sessions.
+// mine modes and elevator counts. Mine SENSING lives on the server (see
+// server/creatures.py): once armed and past the delay, a mine is live forever
+// — across rejoins and empty worlds — and its owner exemption is enforced by
+// name server-side. The server tells one client to run the explosion
+// (main.js onMineTrip -> world.igniteTNT); this file keeps only the strike
+// handling and the local arming blink. Elevator motion runs on the riding
+// client, mirroring how TNT fuses work.
 
 import * as THREE from 'three';
 import * as audio from './audio.js';
@@ -50,10 +52,8 @@ const ELEV_INFO = {
                      nextMsg: '⬆ Now it glides FORWARD, the way you look — starting at 1' },
 };
 
-const MINE_ARM_DELAY = 5;    // seconds from arming strike to a live sensor
-const MINE_RANGE = 2.5;      // trigger distance from the block centre
-const MINE_ADOPT_T = 1;      // seconds between orphaned-mine scans
-const MINE_ADOPT_R = 16;     // horizontal radius scanned around the player
+const MINE_ARM_DELAY = 5;    // seconds from arming strike to live — MUST match
+                             // MINE_ARM_DELAY in server/creatures.py
 const ELEV_SPEED = 2.5;      // platform speed, blocks/second
 const RIDE_GRACE = 0.5;      // seconds off the platform before it heads home
 const STAND_DELAY = 0.25;    // stand this long on an elevator to launch it
@@ -67,10 +67,7 @@ export class Gear {
     this.remotes = remotes;
     this.atlas = atlasCanvas;
     this.msg = msg;
-    this.mines = new Map();       // "x,y,z" -> mine state
-    this.owners = new Map();      // "x,y,z" -> name of who armed it (server-fed)
-    this.myName = '';             // local account name (set from the config)
-    this._adoptT = 0;             // countdown to the next orphaned-mine scan
+    this.mines = new Map();       // "x,y,z" -> local arming-blink state only
     this.elevators = new Map();   // "ox,oy,oz" -> flying platform
     this._standKey = null;        // dwell tracking for elevator launch
     this._standT = 0;
@@ -83,50 +80,8 @@ export class Gear {
   }
 
   update(dt) {
-    this._adoptOrphanMines(dt);
     this._updateMines(dt);
     this._updateElevators(dt);
-  }
-
-  // Seed mine ownership from the world config (called once on join).
-  setOwners(map) {
-    this.owners = new Map(Object.entries(map || {}));
-  }
-
-  // Track ownership as edits flow in: an armed mine carries its owner's name;
-  // any other block written at that spot retires the record.
-  noteEdit(x, y, z, block, owner) {
-    const k = key(x, y, z);
-    if (block === PROX_OTHERS || block === PROX_ALL) {
-      if (owner) this.owners.set(k, owner);
-    } else {
-      this.owners.delete(k);
-    }
-  }
-
-  // Mine sensors live in the client that armed them — so a page reload (or a
-  // friend's mine) leaves armed-looking blocks nobody is watching. Any armed
-  // mine block near the player with no local sensor gets adopted here, with
-  // the full arming delay so a just-noticed mine never fires the instant you
-  // (or its still-arming owner, in multiplayer) are spotted next to it.
-  // (Two clients may both sense the same mine; the fuse dedup and the block
-  // vanishing with the first crater keep a rare double boom harmless.)
-  // Candidates come from the world's mine-block index — this used to volume-
-  // scan ~23k blocks around the player every second, a metronomic stutter.
-  _adoptOrphanMines(dt) {
-    this._adoptT -= dt;
-    if (this._adoptT > 0) return;
-    this._adoptT = MINE_ADOPT_T;
-    if (this.world.prox.size === 0) return;          // no mines anywhere loaded
-    const p = this.player.pos;
-    for (const [x, y, z] of this.world.prox.values()) {
-      if (Math.abs(x - p.x) > MINE_ADOPT_R || Math.abs(z - p.z) > MINE_ADOPT_R
-          || Math.abs(y - p.y) > 10) continue;
-      const k = key(x, y, z);
-      if (this.mines.has(k)) continue;
-      const b = this.world.getBlock(x, y, z);        // index holds OFF mines too
-      if (b === PROX_OTHERS || b === PROX_ALL) this._armMine(k, x, y, z, true);
-    }
   }
 
   // --- Firestone strikes ------------------------------------------------------
@@ -171,23 +126,22 @@ export class Gear {
     audio.playIgnite(pos);
     if (block === PROX_OFF) {
       this.world.setBlock(x, y, z, PROX_OTHERS);
-      this.owners.set(k, this.myName);
       this._armMine(k, x, y, z);
       this.msg(`💣 Mine ON — it will never blow up on YOU. Live in ${MINE_ARM_DELAY} seconds!`);
     } else if (block === PROX_OTHERS) {
       this.world.setBlock(x, y, z, PROX_ALL);
-      this.owners.set(k, this.myName);
       this._armMine(k, x, y, z);                       // arming restarts
       this.msg(`💣 DANGER mine — it can blow up on YOU too! Live in ${MINE_ARM_DELAY} seconds — run!`);
     } else {
       this._dropMine(k);
-      this.owners.delete(k);
       this.world.setBlock(x, y, z, PROX_OFF);
       this.msg('💣 Mine turned off.');
     }
   }
 
-  _armMine(k, x, y, z, quiet = false) {
+  // Local arming feedback only — the overlay blinks for the same 5 seconds
+  // the server counts down, then the mine is the server's to watch.
+  _armMine(k, x, y, z) {
     let m = this.mines.get(k);
     if (!m) {
       const mesh = new THREE.Mesh(this._overlayGeo, this._armMat);
@@ -196,10 +150,8 @@ export class Gear {
       m = { x, y, z, mesh };
       this.mines.set(k, m);
     }
-    m.state = 'arming';
     m.t = MINE_ARM_DELAY;
-    m.quiet = quiet;              // adopted silently — no "LIVE" toast
-    m.mesh.material = this._armMat;
+    m.told = false;
     m.mesh.visible = true;
   }
 
@@ -215,48 +167,13 @@ export class Gear {
         this._dropMine(k);
         continue;
       }
-      if (m.state === 'arming') {
-        m.t -= dt;
-        m.mesh.visible = Math.floor(m.t * 4) % 2 === 0;   // slow blink
-        if (m.t <= 0) {
-          m.state = 'live';
-          m.mesh.visible = false;
-          if (!m.quiet) this.msg('💣 Mine is LIVE — careful!');
-        }
-      } else if (m.state === 'live') {
-        if (this._proximity(m.x, m.y, m.z, b === PROX_ALL, this.owners.get(k)) < MINE_RANGE) {
-          // No second chances: the sensor fires the charge on contact. Routed
-          // through the shared fuse (at zero length) so a mine that's also
-          // caught in someone else's blast can't detonate twice. The crater is
-          // persisted + relayed; main.js's explosion hook applies player
-          // damage and kills creatures caught in it.
-          this._dropMine(k);
-          this.world.igniteTNT(m.x, m.y, m.z, 0);
-        }
+      m.t -= dt;
+      m.mesh.visible = m.t > 0 && Math.floor(m.t * 4) % 2 === 0;   // slow blink
+      if (m.t <= 0 && !m.told) {
+        m.told = true;
+        this.msg('💣 Mine is LIVE — careful!');
       }
     }
-  }
-
-  // Nearest watched thing to the mine centre. Creatures always count. A mine
-  // armed for OTHERS never counts its owner — local or remote, whoever's
-  // client is running the sensor — while EVERYONE counts all players. Mines
-  // with no owner on record (armed before ownership existed) fall back to the
-  // old rule: the local player doesn't count.
-  _proximity(x, y, z, includeAll, owner) {
-    const cx = x + 0.5, cy = y + 0.5, cz = z + 0.5;
-    let best = Infinity;
-    for (const mob of this.mobs.mobs) {
-      best = Math.min(best, Math.hypot(mob.pos.x - cx, mob.pos.y + 0.4 - cy, mob.pos.z - cz));
-    }
-    for (const r of this.remotes.players.values()) {
-      if (!includeAll && owner && r.name === owner) continue;   // the owner is safe
-      best = Math.min(best, Math.hypot(r.cur.x - cx, r.cur.y + 0.9 - cy, r.cur.z - cz));
-    }
-    if (includeAll || (owner && owner !== this.myName)) {
-      const p = this.player.pos;
-      best = Math.min(best, Math.hypot(p.x - cx, p.y + 0.9 - cy, p.z - cz));
-    }
-    return best;
   }
 
   // --- Elevators ----------------------------------------------------------------

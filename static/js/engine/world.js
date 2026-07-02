@@ -102,7 +102,6 @@ export class World {
     // active light count, so toggling visibility forces program recompiles —
     // a burst of frame hitches right at nightfall.
     this.glow = new Map();       // "x,y,z" -> [gx, gy, gz] for every loaded glowstone
-    this.prox = new Map();       // "x,y,z" -> [x, y, z] for every loaded mine block
     this._glowT = 0;
     this._glowAssignT = 1;       // force an assignment on the first night frame
     this._glowDirty = true;
@@ -172,10 +171,6 @@ export class World {
     const gk = `${wx},${wy},${wz}`;
     if (isGlow(block)) { this.glow.set(gk, [wx, wy, wz]); this._glowDirty = true; }
     else if (isGlow(prev)) { this.glow.delete(gk); this._glowDirty = true; }
-    // Same for proximity mines: gear's orphan-adoption reads this index instead
-    // of volume-scanning thousands of blocks around the player every second.
-    if (isProx(block)) this.prox.set(gk, [wx, wy, wz]);
-    else if (isProx(prev)) this.prox.delete(gk);
 
     this._markDirty(cx, cz);
     if (lx === 0) this._markDirty(cx - 1, cz);
@@ -569,7 +564,6 @@ export class World {
     this._lastChunk = null;
     this.pending.clear();
     this._retryAt.clear();
-    this.prox.clear();
     this._floods = [];
     this._settles = [];
     this._settlePending = [];
@@ -586,28 +580,19 @@ export class World {
     for (const L of this.glowLights) L.intensity = 0;
   }
 
-  // --- Block indexes (glowstone lights, proximity mines) ---------------------
-  // Add/remove a chunk's special blocks to/from the position indexes — one
-  // pass over the data covers both glowing blocks and mine blocks.
+  // --- Block index (glowstone lights) -----------------------------------------
+  // Add/remove a chunk's glowing blocks to/from the light index.
   _indexChunk(cx, cz, data, add) {
     const { CX, CZ } = DIM;
     for (let i = 0; i < data.length; i++) {
-      const b = data[i];
-      const g = isGlow(b), p = isProx(b);
-      if (!g && !p) continue;
+      if (!isGlow(data[i])) continue;
       const x = i % CX;
       const z = Math.floor(i / CX) % CZ;
       const y = Math.floor(i / (CX * CZ));
       const wx = cx * CX + x, wz = cz * CZ + z;
       const k = `${wx},${y},${wz}`;
-      if (g) {
-        if (add) this.glow.set(k, [wx, y, wz]); else this.glow.delete(k);
-        this._glowDirty = true;
-      } else if (add) {
-        this.prox.set(k, [wx, y, wz]);
-      } else {
-        this.prox.delete(k);
-      }
+      if (add) this.glow.set(k, [wx, y, wz]); else this.glow.delete(k);
+      this._glowDirty = true;
     }
   }
 

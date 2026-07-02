@@ -74,6 +74,17 @@ WP_RADIUS = 0.55
 # Day/night — MUST match static/js/engine/sky.js (dayLength, +0.30 offset).
 DAY_LENGTH = 420.0
 
+# Proximity mines are sensed by the SERVER, like creatures: once armed (and
+# past the arming delay) a mine stays live forever — across rejoins, empty
+# worlds and rewinds — until it's disarmed or destroyed. Its owner is stored
+# in the world file, so it never fires on the player who set it, no matter
+# when they come back. The client only *executes* the explosion the server
+# tells it about (craters and chains stay client-computed, like TNT).
+MINE_RANGE = 2.5
+MINE_ARM_DELAY = 5.0         # matches the client's arming blink (gear.js)
+PROX_OTHERS = 26             # armed: everyone but the owner
+PROX_ALL = 27                # armed: everyone, owner included
+
 
 def daylight_now(now: float | None = None) -> float:
     t = (((time.time() if now is None else now) / DAY_LENGTH) + 0.30) % 1.0
@@ -516,6 +527,7 @@ class WorldSim:
         self.spawn_timer = 2.0
         self._wild_n = itertools.count(1)
         self.dirty = False                            # persistent state changed
+        self.mine_live = {}                           # "x,y,z" -> go-live time
 
     # --- lifecycle ---------------------------------------------------------------
     def load_persistent(self, creatures: dict):
@@ -654,6 +666,53 @@ class WorldSim:
         """Drop every non-persistent creature (testing / parent control)."""
         for nid in [n for n in self.creatures if not n.startswith("c")]:
             del self.creatures[nid]
+
+    # --- proximity mines ---------------------------------------------------------
+    def mine_armed(self, key: str):
+        """An arming edit just landed: this mine goes live after the delay."""
+        self.mine_live[key] = time.monotonic() + MINE_ARM_DELAY
+
+    def mines_tick(self, mines: dict, players: list, now: float) -> list:
+        """Authoritative sensing over the world's armed-mine map ({key: owner}).
+        A key this sim has never seen was armed in an earlier session — it is
+        live IMMEDIATELY: mines don't doze while their owner is away. Returns
+        [(x, y, z)] of mines that just tripped."""
+        trips = []
+        for key, owner in list(mines.items()):
+            t = self.mine_live.get(key)
+            if t is None:
+                self.mine_live[key] = t = now         # pre-armed: already live
+            if now < t:
+                continue                              # still arming
+            try:
+                x, y, z = (int(v) for v in key.split(","))
+            except ValueError:
+                continue
+            b = self.view.get_block(x, y, z)
+            if b != PROX_OTHERS and b != PROX_ALL:
+                self.mine_live.pop(key, None)         # defused or blown away
+                continue
+            cx, cy, cz = x + 0.5, y + 0.5, z + 0.5
+            tripped = False
+            for c in self.creatures.values():         # creatures always count
+                if math.hypot(c.x - cx, c.y + 0.4 - cy, c.z - cz) < MINE_RANGE:
+                    tripped = True
+                    break
+            if not tripped:
+                for p in players:
+                    if b == PROX_OTHERS and p.get("name") == owner:
+                        continue                      # never fires on its owner
+                    if math.hypot(p["x"] - cx, p["y"] + 0.9 - cy,
+                                  p["z"] - cz) < MINE_RANGE:
+                        tripped = True
+                        break
+            if tripped:
+                self.mine_live.pop(key, None)
+                trips.append((x, y, z))
+        for key in list(self.mine_live.keys()):       # disarmed entries fall away
+            if key not in mines:
+                self.mine_live.pop(key, None)
+        return trips
 
     # --- the tick --------------------------------------------------------------------
     def tick(self, dt, players, peaceful, daylight, wildlife=True):

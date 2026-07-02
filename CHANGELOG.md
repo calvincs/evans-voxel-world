@@ -4,6 +4,39 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Mines stay live forever (server-watched)
+
+**Why:** mine sensors lived in whichever browser was nearby. Leave the world
+and nobody was watching your minefield; come back and each mine re-ran its
+5-second arming blink as you approached — a "supposedly live" mine could be
+walked over safely for 5 seconds, and creatures couldn't trip anything while
+no player was close.
+
+**What changed:**
+- **The server watches every armed mine** (`server/creatures.py mines_tick`,
+  in the same 10 Hz loop as the creatures): fresh arms honour the 5-second
+  delay, and after that a mine is live *forever* — across rejoins, empty
+  worlds, and rewinds — until defused or destroyed. A mine the server has
+  never seen before (armed in an earlier session) is live immediately.
+- **Ownership is enforced server-side by name**: an OTHERS-mine never fires
+  on the player who armed it, no matter when they come back; an EVERYONE-mine
+  fires on anyone, owner included. Creatures always count. (The HTTP edit
+  fallback now records the owner too — it used to drop it.)
+- When a mine trips, the server tells ONE client to run the explosion, so
+  craters and chain reactions stay exactly as they were (client-computed,
+  like TNT). The background tick now also runs fuses, so a hidden tab still
+  detonates what it's told to.
+- The client kept only the strike handling and the local arming blink — the
+  1 Hz orphan-adoption scan, the client-side sensor, and the now-unused
+  mine-block index are gone.
+- Tests: 7 new pure-Python mine scenarios (owner exemption, pre-armed
+  liveness, delay, EVERYONE mode, creature trips, defusal); `test_mines.py`
+  and `test_mine_ownership.py` rewritten for real-time server sensing —
+  including the exact reported case: armed mine → leave → rejoin → live
+  immediately, still owner-safe. The rewrite surfaced that test arenas must
+  now be persisted to the server (client-only platforms are phantoms the
+  server's pigs fall through).
+
 ## 2026-07-02 — Water finds its level
 
 **Why:** placed water just froze wherever it was clicked — even floating in

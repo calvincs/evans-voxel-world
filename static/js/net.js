@@ -71,6 +71,7 @@ export class Net {
       case 'mobs':    h.onMobs && h.onMobs(m.m || []); break;
       case 'mobdie':  h.onMobDie && h.onMobDie(m); break;
       case 'mobbite': h.onMobBite && h.onMobBite(m); break;
+      case 'minetrip': h.onMineTrip && h.onMineTrip(m); break;
       case 'peaceful': h.onPeaceful && h.onPeaceful(!!m.on); break;
       case 'notice':  h.onNotice && h.onNotice(m.msg); break;
     }

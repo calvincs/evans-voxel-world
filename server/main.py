@@ -489,11 +489,10 @@ def world_config(wid: str, request: Request):
         "spawn": _spawn_for(w),
         # Where the village is (or null) — the client spawns villagers there.
         "village": gen_for_world(w).village_info(),
-        # Armed-mine ownership {"x,y,z": playerName}: sensors never fire on a
-        # mine's owner, and this survives reloads and adoption by other clients.
-        "mines": w.get("mines", {}),
-        # Placed (egg-hatched) creatures {cid: {t, x, y, z, hp}} — the room's
-        # sim owner brings them to life; everyone sees the same ones.
+        # (Armed-mine ownership lives server-side now — the sim watches mines
+        # itself, so clients no longer need the map.)
+        # Placed (egg-hatched) creatures {cid: {t, x, y, z, hp}} — simulated
+        # server-side; everyone sees the same ones.
         "creatures": w.get("creatures", {}),
         "player": w.get("player"),
         # Server wall clock: clients derive the day/night phase from this so
@@ -518,15 +517,19 @@ def world_chunk(wid: str, cx: int, cz: int, request: Request):
 
 @app.post("/api/worlds/{wid}/edit")
 def world_edit(wid: str, edit: Edit, request: Request):
-    access_or_error(request, wid)
+    u, _ = access_or_error(request, wid)
     if wid in _reverting:                # same gate the WS edit path has
         raise HTTPException(409, "world is being rewound")
     if not _valid_edit(edit.x, edit.y, edit.z, edit.block):
         raise HTTPException(400, "bad edit")
-    store.set_block(wid, edit.x, edit.y, edit.z, edit.block)
+    # Owner attribution matters here too: a mine armed over the HTTP fallback
+    # must still know who it belongs to.
+    store.set_block(wid, edit.x, edit.y, edit.z, edit.block, u["name"])
     sim = _sims.get(wid)
     if sim:
         sim.view.invalidate(edit.x, edit.z)
+        if edit.block in store.PROX_ARMED:
+            sim.mine_armed(f"{edit.x},{edit.y},{edit.z}")
     return {"ok": True}
 
 
@@ -615,11 +618,21 @@ async def _sim_loop():
                     _sims.pop(wid, None)
                     continue
                 sim = _sims[wid]
-                players = [{"pid": st["id"], "x": st["pos"]["x"],
-                            "y": st["pos"]["y"], "z": st["pos"]["z"]}
+                players = [{"pid": st["id"], "name": st["name"],
+                            "x": st["pos"]["x"], "y": st["pos"]["y"],
+                            "z": st["pos"]["z"]}
                            for st in room.values() if st["pos"]]
                 ev = sim.tick(SIM_TICK, players, bool(w.get("peaceful")), daylight,
                               wildlife=_wildlife)
+                # Mines are watched here too — armed is armed, whether or not
+                # the owner (or anyone) is around. A trip is executed by ONE
+                # client (craters and chain reactions stay client-computed).
+                for (mx, my, mz) in sim.mines_tick(w.get("mines", {}), players, t0):
+                    for ws2, st in list(room.items()):
+                        if st["pos"] is not None:
+                            await _send_safe(ws2, {"type": "minetrip",
+                                                   "x": mx, "y": my, "z": mz})
+                            break
                 await _broadcast(room, None, {"type": "mobs", "m": ev["snapshot"]})
                 for (x, y, z, kind) in ev["deaths"]:
                     await _broadcast(room, None,
@@ -759,6 +772,8 @@ async def world_ws(ws: WebSocket, wid: str):
                     sim = _sims.get(wid)
                     if sim:
                         sim.view.invalidate(x, z)     # creatures see the new block
+                        if block in store.PROX_ARMED:
+                            sim.mine_armed(f"{x},{y},{z}")   # live after the delay
                     out = {"type": "edit", "x": x, "y": y, "z": z, "block": block}
                     # Arming a mine stamps the owner so every client's sensor
                     # knows who it must never fire on.
@@ -776,8 +791,10 @@ async def world_ws(ws: WebSocket, wid: str):
                     await asyncio.to_thread(store.set_blocks, wid, items, user["name"])
                     sim = _sims.get(wid)
                     if sim:
-                        for (x2, _, z2, _b) in items:
+                        for (x2, y2, z2, b2) in items:
                             sim.view.invalidate(x2, z2)
+                            if b2 in store.PROX_ARMED:
+                                sim.mine_armed(f"{x2},{y2},{z2}")
                     await _broadcast(room, ws, {"type": "edits", "edits": [
                         {"x": x, "y": y, "z": z, "block": b} for (x, y, z, b) in items]})
             elif t == "fx":
