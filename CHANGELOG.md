@@ -4,6 +4,28 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — No more silent failures on the menu, and a mute that mutes
+
+**Why (menu):** if loading a world failed, the error only went to the console —
+the menu just sat there dead. And an expired session made the world list say
+"No worlds yet" (terrifying) while the Create button silently did nothing.
+
+**Why (sound):** the 🔊/🔇 button only stopped the music. The scary sounds — the
+wolf growl in the dark — kept playing, exactly what a kid mutes to avoid. The
+choice also reset on every reload.
+
+**What changed (`static/js/main.js`, `static/js/audio.js`):**
+- A failed world load now shows the "Couldn't start" panel with a ↩ Try again
+  button; picking a world shows "Loading world…" immediately.
+- An expired session returns to the sign-in screen instead of lying about your
+  worlds; a failed world-list load says so and retries.
+- 🔇 now mutes music AND all sound effects (voice chat intentionally stays on,
+  so muting the game never cuts a kid off from their sibling). The setting
+  persists across reloads.
+- New `tools/test_smoke.py` — real-browser smoke test (isolated server +
+  headless Chrome): boots the demo world, exercises the mute button, and
+  proves a bogus world shows the error panel. 8 checks.
+
 ## 2026-07-02 — Forgotten passwords are no longer a dead end
 
 **Why:** a kid who forgot their password was hard-locked out — the game had no

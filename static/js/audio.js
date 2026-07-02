@@ -16,7 +16,12 @@
 let ctx = null;
 let master = null, musicGain = null, sfxGain = null, voiceGain = null;
 let started = false;
-let musicOn = true;
+// One master toggle for ALL game sound (music + effects — the growl in the
+// dark included). Voice chat stays audible: muting the game shouldn't cut a
+// kid off from their sibling. Persisted so a reload doesn't undo the choice.
+const SFX_LEVEL = 0.7;
+let soundOn = true;
+try { soundOn = localStorage.getItem('evans-sound') !== '0'; } catch (_) {}
 
 const OVERRIDE_NAMES = ['music', 'break', 'place', 'step', 'explode'];
 const EXTS = ['mp3', 'ogg', 'wav'];
@@ -44,7 +49,7 @@ function ensureCtx() {
   ctx = new AC();
   master = ctx.createGain(); master.gain.value = 0.55; master.connect(ctx.destination);
   musicGain = ctx.createGain(); musicGain.gain.value = 0.0; musicGain.connect(master);
-  sfxGain = ctx.createGain(); sfxGain.gain.value = 0.7; sfxGain.connect(master);
+  sfxGain = ctx.createGain(); sfxGain.gain.value = soundOn ? SFX_LEVEL : 0.0; sfxGain.connect(master);
   voiceGain = ctx.createGain(); voiceGain.gain.value = 1.0; voiceGain.connect(master);
 }
 
@@ -123,18 +128,22 @@ export function resume() {
     ctx.decodeAudioData(pendingBuffers[name].slice(0))
       .then((buf) => { samples[name] = buf; })
       .catch(() => {})
-  )).then(() => { if (musicOn) startMusic(); });
+  )).then(() => { if (soundOn) startMusic(); });
 
-  if (musicOn) startMusic();   // start generative music immediately
+  if (soundOn) startMusic();   // start generative music immediately
 }
 
-export function isMusicOn() { return musicOn; }
+export function isSoundOn() { return soundOn; }
 
-export function toggleMusic() {
-  musicOn = !musicOn;
-  if (!ctx) return musicOn;
-  if (musicOn) startMusic(); else stopMusic();
-  return musicOn;
+export function toggleSound() {
+  soundOn = !soundOn;
+  try { localStorage.setItem('evans-sound', soundOn ? '1' : '0'); } catch (_) {}
+  if (!ctx) return soundOn;
+  // Fade rather than snap, and silence effects too — 🔇 must actually mean
+  // "no scary sounds at night", not "no music but the growls stay".
+  sfxGain.gain.setTargetAtTime(soundOn ? SFX_LEVEL : 0.0001, ctx.currentTime, 0.1);
+  if (soundOn) startMusic(); else stopMusic();
+  return soundOn;
 }
 
 // --- White-noise helper for percussive SFX ----------------------------------

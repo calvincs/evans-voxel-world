@@ -322,7 +322,11 @@ async function main() {
 
   await ensureLoggedIn();                        // gate: sign in / create account
   const worldId = await chooseWorld();
-  startGame(worldId, false);
+  // Instant feedback while chunks/config load; startGame hides the menu when
+  // it's ready. Also: RETURN the promise so a failed load hits main().catch
+  // instead of dying as an unhandled rejection behind a dead menu.
+  $('world-list').innerHTML = '<p class="loading">Loading world…</p>';
+  return startGame(worldId, false);
 }
 
 // --- World menu --------------------------------------------------------------
@@ -338,14 +342,28 @@ function chooseWorld() {
 
     const create = async () => {
       const name = nameInput.value.trim();
-      const { data } = await req('POST', '/api/worlds', { name: name || 'New World' });
-      if (data && data.world) resolve(data.world.id);
+      const btn = $('create-world');
+      btn.disabled = true;
+      const { ok, status, data } = await req('POST', '/api/worlds', { name: name || 'New World' });
+      btn.disabled = false;
+      if (ok && data && data.world) resolve(data.world.id);
+      else if (status === 401) location.reload();          // session expired -> sign-in screen
+      else toast("Couldn't create the world — try again.", 3000);
     };
     $('create-world').onclick = create;
     nameInput.onkeydown = (e) => { if (e.key === 'Enter') create(); };
 
     const refresh = async () => {
-      const { data } = await req('GET', '/api/worlds');
+      const { ok, status, data } = await req('GET', '/api/worlds');
+      if (!ok) {
+        // Never show "No worlds yet" on a failed request — to a kid that reads
+        // as "my worlds are gone". An expired session goes back to sign-in;
+        // anything else keeps retrying (the health monitor covers server-down).
+        if (status === 401) { location.reload(); return; }
+        list.innerHTML = '<p class="empty">⚠️ Couldn\'t load the world list — retrying…</p>';
+        setTimeout(refresh, 2000);
+        return;
+      }
       const worlds = (data && data.worlds) || [];
       list.innerHTML = '';
       if (worlds.length === 0) {
@@ -462,7 +480,14 @@ function timeAgo(unixSeconds) {
 
 // --- Game --------------------------------------------------------------------
 async function startGame(worldId, demo) {
-  const cfg = await (await fetch(`/api/worlds/${worldId}/config`)).json();
+  const res = await fetch(`/api/worlds/${worldId}/config`);
+  if (!res.ok) {
+    if (res.status === 401) { location.reload(); return; }  // expired session
+    const detail = await res.json().catch(() => null);
+    throw new Error((detail && detail.detail)
+      || `This world couldn't be opened (error ${res.status}).`);
+  }
+  const cfg = await res.json();
   setDims(cfg);
 
   const canvas = $('game');
@@ -818,13 +843,20 @@ async function startGame(worldId, demo) {
     }
   });
 
-  // Music: 🔊 button + M hotkey.
+  // Sound: 🔊 button + M hotkey. Master toggle — music AND effects (voice
+  // chat stays on). The choice persists across reloads.
   const musicBtn = $('music');
-  const toggleMusicUI = () => { audio.resume(); musicBtn.textContent = audio.toggleMusic() ? '🔊' : '🔇'; };
+  const renderSoundBtn = () => {
+    musicBtn.textContent = audio.isSoundOn() ? '🔊' : '🔇';
+    musicBtn.title = audio.isSoundOn()
+      ? 'Sound off — music and effects (voice chat stays on)' : 'Sound on';
+  };
+  const toggleMusicUI = () => { audio.resume(); audio.toggleSound(); renderSoundBtn(); };
   musicBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleMusicUI(); });
   document.addEventListener('keydown', (e) => {
     if (e.code === 'KeyM' && !e.repeat && !typing()) toggleMusicUI();
   });
+  renderSoundBtn();
 
   // Persist player position to this world.
   const savePlayer = (beacon = false) => {
@@ -980,6 +1012,10 @@ function flashCrosshair() {
 
 main().catch((e) => {
   console.error(e);
-  $('menu').innerHTML = `<div class="panel"><h1>Couldn't start</h1><p>${e}</p></div>`;
+  const msg = (e && e.message) ? e.message : String(e);
+  $('menu').innerHTML = `<div class="panel"><h1>Couldn't start</h1>
+    <p>${msg}</p>
+    <div class="buttons"><button class="primary-btn" id="retry-btn">↩ Try again</button></div></div>`;
   $('menu').classList.remove('hidden');
+  $('retry-btn').onclick = () => location.reload();
 });
