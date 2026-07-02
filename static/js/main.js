@@ -580,7 +580,7 @@ async function startGame(worldId, demo) {
 
   // Contraption blocks: jack-o'-lanterns, proximity mines, elevators. The
   // Firestone routes strikes here first; TNT stays with player/world.
-  const gear = new Gear(world, player, mobs, remotes, atlas.image, (m) => toast(m, 2500));
+  const gear = new Gear(world, player, mobs, remotes, atlas.image, (m) => toast(m, 3500));
   gear.myName = currentUser ? currentUser.name : '';      // mines spare their owner
   gear.setOwners(cfg.mines);                              // ...across reloads too
   player.onStrike = (x, y, z, b) => gear.strike(x, y, z, b);
@@ -834,18 +834,51 @@ async function startGame(worldId, demo) {
       drawBlockIcon(cv, atlasImg, block, 40);
       item.appendChild(cv);
       item.addEventListener('click', () => pickBlock(block));
+      // Names used to be tooltip-only — invisible on a tablet. Hovering (or
+      // picking) now writes the name into the panel's readout.
+      item.addEventListener('mouseenter', () => setInvName(BLOCKS[block].name));
       grid.appendChild(item);
     }
+  }
+  // Mini hotbar inside the panel: shows which slot a pick goes into, and lets
+  // the kid switch slots without closing — load the whole bar in one visit.
+  function renderInvHotbar() {
+    const strip = $('inv-hotbar'); strip.innerHTML = '';
+    HOTBAR.forEach((block, i) => {
+      const s = document.createElement('div');
+      s.className = 'inv-slot' + (i === player.selected ? ' active' : '');
+      s.title = BLOCKS[block].name;
+      const cv = document.createElement('canvas'); cv.width = cv.height = 30;
+      drawBlockIcon(cv, atlasImg, block, 30);
+      s.appendChild(cv);
+      const k = document.createElement('span'); k.className = 'key'; k.textContent = i + 1;
+      s.appendChild(k);
+      s.addEventListener('click', (e) => {
+        e.stopPropagation();
+        player.selectBlock(i);
+        renderInvHotbar();
+        setInvName();
+      });
+      strip.appendChild(s);
+    });
+  }
+  function setInvName(name) {
+    $('inv-name').textContent = name || BLOCKS[HOTBAR[player.selected]].name;
   }
   function pickBlock(block) {
     HOTBAR[player.selected] = block;            // load it into the active slot
     updateHotbarSlot(player.selected, atlasImg);
-    toast(BLOCKS[block].name, 1500);            // names are tooltip-only otherwise
-    closeInventory(true);
+    renderInvHotbar();
+    setInvName(BLOCKS[block].name);
+    toast(`${BLOCKS[block].name} → slot ${player.selected + 1}`, 1500);
+    // Stays open on purpose: with the destination visible, filling several
+    // slots in one visit is the natural flow. Done / E closes.
   }
   function openInventory() {
     if (inventoryOpen) return;
     inventoryOpen = true;
+    renderInvHotbar();
+    setInvName();
     $('inventory').classList.remove('hidden');
     if (!isTouch && document.pointerLockElement === canvas) document.exitPointerLock();
   }

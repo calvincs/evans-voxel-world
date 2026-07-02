@@ -4,6 +4,23 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — The inventory shows what you're doing
+
+**Why:** block names lived only in hover tooltips (invisible on a tablet), and
+which hotbar slot a pick landed in was invisible state. Contraption messages
+were compressed adult English shown for 2.5 seconds.
+
+**What changed:**
+- The inventory (E / 🎒) now has a mini hotbar showing the destination slot —
+  tap a slot to switch, tap blocks to fill several slots in one visit (the
+  panel stays open; Done/E closes). A readout names the block under your
+  pointer or the one you just picked (`static/js/main.js`, `index.html`,
+  `style.css`).
+- Mine and elevator toasts rewritten for a young reader ("💣 Mine ON — it will
+  never blow up on YOU. Live in 5 seconds!"), and contraption toasts stay up
+  a second longer (`static/js/gear.js`).
+- Smoke test grew to 16 checks (inventory flow exercised end-to-end).
+
 ## 2026-07-02 — Peaceful is one tap away, in-game
 
 **Why:** night interrupts building every few minutes, and the only escape

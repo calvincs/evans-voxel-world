@@ -150,6 +150,28 @@ def main():
         page.wait_for("window.game.mobs.peaceful === false", 10, "peaceful off again")
         check("peaceful toggles back off", True)
 
+        # --- B3: inventory — destination slot visible, pick fills it, stays open
+        page.eval("document.getElementById('bag').click()")
+        page.wait_for("!document.getElementById('inventory').classList.contains('hidden')",
+                      10, "inventory opens")
+        check("inventory shows a mini hotbar (8 slots)", page.eval(
+            "document.querySelectorAll('#inv-hotbar .inv-slot').length") == 8)
+        page.eval("document.querySelectorAll('#inv-hotbar .inv-slot')[3].click()")
+        check("tapping a mini slot changes the destination", page.eval(
+            "window.game.player.selected") == 3)
+        picked = page.eval("""(() => {
+          const item = document.querySelectorAll('#inv-grid .inv-item')[10];
+          item.click();
+          return item.title;
+        })()""")
+        check("picking a block fills the chosen hotbar slot", page.eval(
+            "document.querySelectorAll('#hotbar .slot')[3].title") == picked, picked)
+        check("block name is shown in the panel", page.eval(
+            "document.getElementById('inv-name').textContent") == picked)
+        check("inventory stays open for multi-slot loading", page.eval(
+            "!document.getElementById('inventory').classList.contains('hidden')") is True)
+        page.eval("document.getElementById('inv-close').click()")
+
         # --- C: bogus world -> visible error panel, not a dead menu ------------
         # (navigate the same page; headless Chrome doesn't open real popups)
         page.eval(f"location.href = 'http://localhost:{PORT}/?demo&w=w_bogus00'")

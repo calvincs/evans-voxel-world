@@ -117,9 +117,22 @@ html, body {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
   text-align: center;
 }
-.inv-panel h2 { color: #2f6fd6; font-size: 20px; margin-bottom: 12px; }
+.inv-panel h2 { color: #2f6fd6; font-size: 20px; margin-bottom: 8px; }
 .inv-panel h3 { color: #7a5ec0; font-size: 16px; margin: 14px 0 8px; }
-.inv-hint { color: #7c8aa3; font-size: 13px; font-weight: normal; }
+.inv-hint { color: #7c8aa3; font-size: 14px; font-weight: normal; margin-bottom: 10px; }
+
+/* Mini hotbar inside the inventory: shows (and switches) the destination slot,
+   so "which slot am I filling?" is never invisible state. */
+#inv-hotbar { display: flex; justify-content: center; gap: 5px; margin-bottom: 8px; }
+.inv-slot {
+  position: relative; width: 42px; height: 42px; border-radius: 8px;
+  border: 3px solid rgba(47, 111, 214, 0.25); background: rgba(47, 111, 214, 0.06);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.inv-slot canvas { width: 30px; height: 30px; image-rendering: pixelated; }
+.inv-slot.active { border-color: #ffd34d; background: #fff7e0; box-shadow: 0 0 10px rgba(255, 211, 77, 0.7); }
+.inv-slot .key { position: absolute; right: 3px; bottom: 1px; font-size: 10px; color: #7c8aa3; }
+#inv-name { font-size: 16px; font-weight: bold; color: #28303d; margin-top: 10px; min-height: 20px; }
 #inv-grid {
   display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px;
   max-height: 42vh; overflow-y: auto;

@@ -37,18 +37,18 @@ const key = (x, y, z) => `${x},${y},${z}`;
 // from the rider's facing a horizontal one glides (0 fwd, 1 right, 2 back,
 // 3 left), and what the 11th strike switches to.
 const ELEV_INFO = {
-  [ELEV_UP]:       { arrow: '⬆', kind: 'up',   turn: 0, next: ELEV_DOWN,
-                     nextMsg: '⬇ Flipped! Elevator now goes DOWN — set to 1' },
-  [ELEV_DOWN]:     { arrow: '⬇', kind: 'down', turn: 0, next: ELEV_UP,
-                     nextMsg: '⬆ Flipped! Elevator now goes UP — set to 1' },
-  [ELEV_SIDE]:     { arrow: '⬆', kind: 'side', turn: 0, next: ELEV_SIDE_R,
-                     nextMsg: '➡ Switched! Now glides to your RIGHT — set to 1' },
-  [ELEV_SIDE_R]:   { arrow: '➡', kind: 'side', turn: 1, next: ELEV_SIDE_REV,
-                     nextMsg: '⬇ Switched! Now glides BACKWARD — set to 1' },
-  [ELEV_SIDE_REV]: { arrow: '⬇', kind: 'side', turn: 2, next: ELEV_SIDE_L,
-                     nextMsg: '⬅ Switched! Now glides to your LEFT — set to 1' },
-  [ELEV_SIDE_L]:   { arrow: '⬅', kind: 'side', turn: 3, next: ELEV_SIDE,
-                     nextMsg: '⬆ Switched! Now glides FORWARD (where you look) — set to 1' },
+  [ELEV_UP]:       { arrow: '⬆', kind: 'up',   word: 'up', turn: 0, next: ELEV_DOWN,
+                     nextMsg: '⬇ Flipped! Now it goes DOWN — starting at 1' },
+  [ELEV_DOWN]:     { arrow: '⬇', kind: 'down', word: 'down', turn: 0, next: ELEV_UP,
+                     nextMsg: '⬆ Flipped! Now it goes UP — starting at 1' },
+  [ELEV_SIDE]:     { arrow: '⬆', kind: 'side', word: 'forward', turn: 0, next: ELEV_SIDE_R,
+                     nextMsg: '➡ Now it glides to your RIGHT — starting at 1' },
+  [ELEV_SIDE_R]:   { arrow: '➡', kind: 'side', word: 'to your right', turn: 1, next: ELEV_SIDE_REV,
+                     nextMsg: '⬇ Now it glides BACKWARD — starting at 1' },
+  [ELEV_SIDE_REV]: { arrow: '⬇', kind: 'side', word: 'backward', turn: 2, next: ELEV_SIDE_L,
+                     nextMsg: '⬅ Now it glides to your LEFT — starting at 1' },
+  [ELEV_SIDE_L]:   { arrow: '⬅', kind: 'side', word: 'to your left', turn: 3, next: ELEV_SIDE,
+                     nextMsg: '⬆ Now it glides FORWARD, the way you look — starting at 1' },
 };
 
 const MINE_ARM_DELAY = 5;    // seconds from arming strike to a live sensor
@@ -154,7 +154,7 @@ export class Gear {
       audio.playIgnite(pos);
       if (count < ELEV_MAX) {
         this.world.setBlock(x, y, z, block + 1);
-        this.msg(`${info.arrow} Elevator set to ${count + 1}`);
+        this.msg(`${info.arrow} Elevator: ${count + 1} blocks ${info.word}`);
       } else {
         // The 11th strike switches direction and restarts the count at 1.
         this.world.setBlock(x, y, z, info.next);
@@ -173,17 +173,17 @@ export class Gear {
       this.world.setBlock(x, y, z, PROX_OTHERS);
       this.owners.set(k, this.myName);
       this._armMine(k, x, y, z);
-      this.msg(`💣 Armed for OTHERS — live in ${MINE_ARM_DELAY}s. Strike again: everyone. Twice: off.`);
+      this.msg(`💣 Mine ON — it will never blow up on YOU. Live in ${MINE_ARM_DELAY} seconds!`);
     } else if (block === PROX_OTHERS) {
       this.world.setBlock(x, y, z, PROX_ALL);
       this.owners.set(k, this.myName);
       this._armMine(k, x, y, z);                       // arming restarts
-      this.msg(`💣 Armed for EVERYONE — you too! Live in ${MINE_ARM_DELAY}s.`);
+      this.msg(`💣 DANGER mine — it can blow up on YOU too! Live in ${MINE_ARM_DELAY} seconds — run!`);
     } else {
       this._dropMine(k);
       this.owners.delete(k);
       this.world.setBlock(x, y, z, PROX_OFF);
-      this.msg('💣 Disarmed.');
+      this.msg('💣 Mine turned off.');
     }
   }
 
@@ -221,7 +221,7 @@ export class Gear {
         if (m.t <= 0) {
           m.state = 'live';
           m.mesh.visible = false;
-          if (!m.quiet) this.msg('💣 Mine is LIVE.');
+          if (!m.quiet) this.msg('💣 Mine is LIVE — careful!');
         }
       } else if (m.state === 'live') {
         if (this._proximity(m.x, m.y, m.z, b === PROX_ALL, this.owners.get(k)) < MINE_RANGE) {
