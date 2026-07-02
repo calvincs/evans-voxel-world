@@ -16,6 +16,7 @@ import { RemotePlayers, playerColor, SELF_COLOR } from './remoteplayers.js';
 import { Voice } from './voice.js';
 import { Mobs } from './mobs.js';
 import { Gear } from './gear.js';
+import { MiniMap } from './minimap.js';
 import {
   buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, ATLAS_COLS, TILE_PX, blockColor, WATER,
   isSpawnEgg, SPAWN_EGGS, EGG_COLORS,
@@ -581,6 +582,8 @@ async function startGame(worldId, demo) {
   // Contraption blocks: jack-o'-lanterns, proximity mines, elevators. The
   // Firestone routes strikes here first; TNT stays with player/world.
   const gear = new Gear(world, player, mobs, remotes, atlas.image, (m) => toast(m, 3500));
+  // Corner minimap: you at the centre, village ring, friends as dots.
+  const minimap = new MiniMap(world, player, remotes, $('minimap'), cfg.village);
   gear.myName = currentUser ? currentUser.name : '';      // mines spare their owner
   gear.setOwners(cfg.mines);                              // ...across reloads too
   player.onStrike = (x, y, z, b) => gear.strike(x, y, z, b);
@@ -764,7 +767,7 @@ async function startGame(worldId, demo) {
     updateVoiceButton();
   }
 
-  window.game = { world, player, sky, remotes, net, voice, mobs, gear };
+  window.game = { world, player, sky, remotes, net, voice, mobs, gear, minimap };
 
   // Swap the menu for the play screen.
   $('menu').classList.add('hidden');
@@ -959,6 +962,7 @@ async function startGame(worldId, demo) {
     // Multiplayer sync.
     if (player.locked) net.sendPos(player.posState(), performance.now());
     remotes.update(dt);
+    minimap.update();
     voice.update();
     // Reflect who's talking on characters + roster.
     remotes.players.forEach((_, id) => remotes.setSpeaking(id, voice.isSpeaking(id)));

@@ -252,7 +252,7 @@ export class World {
 
   _markDirty(cx, cz) {
     const c = this.chunks.get(key(cx, cz));
-    if (c) c.dirty = true;
+    if (c) { c.dirty = true; c.mapDirty = true; }   // mesh + minimap tile
   }
 
   async _loadChunk(cx, cz) {
@@ -311,6 +311,7 @@ export class World {
       chunk.data = data;
       this._indexChunk(chunk.cx, chunk.cz, data, true);
       chunk.dirty = true;
+      chunk.mapDirty = true;
     } catch (_) { /* still offline — the health monitor owns that state */ }
   }
 

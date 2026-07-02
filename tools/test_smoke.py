@@ -172,6 +172,19 @@ def main():
             "!document.getElementById('inventory').classList.contains('hidden')") is True)
         page.eval("document.getElementById('inv-close').click()")
 
+        # --- B4: minimap — tiles drawn, size cycle works ------------------------
+        page.wait_for("!!(window.game.minimap && window.game.minimap.tiles.size > 0)", 20,
+                      "minimap tiles built")
+        check("minimap builds tiles from loaded chunks", True)
+        check("minimap visible in-game", page.eval(
+            "getComputedStyle(document.getElementById('minimap')).display") == "block")
+        page.eval("window.game.minimap.cycle(); window.game.minimap.cycle()")
+        check("minimap can be hidden (cycle x2)", page.eval(
+            "document.getElementById('minimap').style.display") == "none")
+        page.eval("window.game.minimap.cycle()")
+        check("minimap cycles back to visible", page.eval(
+            "document.getElementById('minimap').style.display") == "block")
+
         # --- C: bogus world -> visible error panel, not a dead menu ------------
         # (navigate the same page; headless Chrome doesn't open real popups)
         page.eval(f"location.href = 'http://localhost:{PORT}/?demo&w=w_bogus00'")

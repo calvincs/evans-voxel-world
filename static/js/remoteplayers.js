@@ -30,6 +30,7 @@ export class RemotePlayers {
     this.players.set(p.id, {
       ch,
       name: p.name || '',       // account name — mine sensors spare the owner
+      color: (p.color != null) ? p.color : this._color(p.id),   // minimap dot
       cur: new THREE.Vector3(x, y, z),
       tgt: new THREE.Vector3(x, y, z),
       yaw, tyaw: yaw, pitch: p.pitch || 0, stepDist: 0,

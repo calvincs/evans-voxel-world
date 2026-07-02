@@ -4,6 +4,20 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Minimap
+
+**Why:** no way to find your way home (or find your sibling) in a big world.
+
+**What changed (new `static/js/minimap.js` + wiring):**
+- A circular map sits in the top-right corner with you at the centre. It
+  rotates with you, so "up" is always the way you're facing.
+- Shows the terrain of every loaded chunk (highest block's colour, shaded by
+  height), an orange ring around the village, and other players as dots in
+  their character colours.
+- Tap the map (or press N) to cycle: big → small → hidden. Map tiles rebuild
+  automatically as the world is edited (a few per frame, no hitches).
+- Verified with a real screenshot + smoke test (now 20 checks).
+
 ## 2026-07-02 — Smoother frames while building
 
 **Why:** three measurable stutter sources. (1) The mine "adoption" scan read
