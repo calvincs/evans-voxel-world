@@ -57,7 +57,8 @@ class SnapshotStore:
         return f"{_now()}_{random.randrange(16**6):06x}"
 
     # --- capture / read -------------------------------------------------------
-    def capture(self, wid: str, edits: dict, player, label: str = "") -> dict:
+    def capture(self, wid: str, edits: dict, player, label: str = "",
+                mines: dict | None = None, meta: dict | None = None) -> dict:
         wdir = self._wdir(wid)
         os.makedirs(wdir, exist_ok=True)
         snap = {
@@ -66,6 +67,12 @@ class SnapshotStore:
             "editCount": len(edits or {}),
             "edits": dict(edits or {}),
             "player": player,
+            # Mine ownership travels with the state it belongs to, so a rewind
+            # can't leave an armed mine that no longer knows its owner.
+            "mines": dict(mines or {}),
+            # Enough world metadata (seed above all) to rebuild the world file
+            # from this snapshot alone if it's ever lost or corrupted.
+            "world": dict(meta) if meta else None,
             "label": label,
         }
         with self._lock:
@@ -89,14 +96,21 @@ class SnapshotStore:
             if not fn.endswith(".json") or fn.endswith(".tmp"):
                 continue
             try:
-                with open(os.path.join(wdir, fn)) as f:
+                path = os.path.join(wdir, fn)
+                with open(path) as f:
                     s = json.load(f)
+                # ts has 1-second resolution; captures in the same second (e.g.
+                # an auto snapshot racing a session-end one) tie-break on file
+                # mtime so "newest" is the one actually written last.
                 out.append({"id": s["id"], "ts": s["ts"],
                             "editCount": s.get("editCount", len(s.get("edits", {}))),
-                            "label": s.get("label", "")})
+                            "label": s.get("label", ""),
+                            "_mt": os.stat(path).st_mtime_ns})
             except (json.JSONDecodeError, OSError, KeyError):
                 continue
-        out.sort(key=lambda s: s["ts"], reverse=True)
+        out.sort(key=lambda s: (s["ts"], s["_mt"]), reverse=True)
+        for s in out:
+            del s["_mt"]
         return out
 
     def list(self, wid: str) -> list[dict]:
@@ -121,6 +135,16 @@ class SnapshotStore:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             return None
+
+    def newest_rebuildable(self, wid: str) -> dict | None:
+        """Newest snapshot carrying world metadata (a seed at minimum), i.e. one
+        the world file can be reconstructed from. Snapshots from before metadata
+        existed are skipped — they can restore edits but not recreate a file."""
+        for s in self._all(wid):
+            snap = self.get(wid, s["id"])
+            if snap and (snap.get("world") or {}).get("seed") is not None:
+                return snap
+        return None
 
     # --- housekeeping ---------------------------------------------------------
     def prune(self, wid: str):

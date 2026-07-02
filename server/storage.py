@@ -157,8 +157,13 @@ class WorldStore:
         try:
             with open(path) as f:
                 world = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError:
+            return self._recover(wid)
+        except OSError:
+            log.exception("world %s: file could not be read", wid)
             return None
+        if not isinstance(world, dict) or world.get("seed") is None:
+            return self._recover(wid)    # parses, but isn't a world
         world.setdefault("edits", {})
         world.setdefault("mines", {})
         world.setdefault("player", None)
@@ -169,6 +174,51 @@ class WorldStore:
         world.setdefault("public", True)
         world.setdefault("peaceful", False)
         self.cache[wid] = world
+        return world
+
+    def _recover(self, wid: str) -> dict | None:
+        """The world file is corrupt (unparseable, or not a world). Move it aside
+        — never delete it — and rebuild from the newest snapshot that carries
+        world metadata, so the world reappears in the menu instead of silently
+        vanishing with its snapshots stranded."""
+        path = self._path(wid)
+        quarantine = f"{path}.corrupt-{_now()}"
+        try:
+            os.replace(path, quarantine)
+        except OSError:
+            log.exception("world %s: corrupt file could not be quarantined", wid)
+            return None
+        log.error("world %s: file was corrupt — moved to %s", wid, quarantine)
+        snap = self.snapshots.newest_rebuildable(wid) if self.snapshots else None
+        if not snap:
+            log.error("world %s: no rebuildable snapshot found; restore %s by hand",
+                      wid, quarantine)
+            return None
+        meta = snap["world"]
+        world = {
+            "id": wid,
+            "name": meta.get("name") or wid,
+            "seed": meta["seed"],
+            "village": bool(meta.get("village", False)),
+            "created": meta.get("created") or _now(),
+            "lastPlayed": _now(),
+            "owner": meta.get("owner"),
+            "ownerName": meta.get("ownerName", ""),
+            "public": bool(meta.get("public", True)),
+            "peaceful": bool(meta.get("peaceful", False)),
+            "player": snap.get("player"),
+            "edits": dict(snap.get("edits") or {}),
+            "mines": dict(snap.get("mines") or {}),
+        }
+        self.cache[wid] = world          # same lock-free fill as a normal load
+        self._index.pop(wid, None)
+        try:
+            self._write_file(world)
+        except OSError:
+            log.exception("world %s: rebuilt in memory but could not be re-written", wid)
+        log.error("world %s: rebuilt from snapshot %s (%d edits, taken %s)",
+                  wid, snap["id"], len(world["edits"]),
+                  time.strftime("%Y-%m-%d %H:%M", time.localtime(snap["ts"])))
         return world
 
     def _migrate_legacy(self, legacy_path: str | None):
@@ -305,14 +355,24 @@ class WorldStore:
             self._write(w)
         return True
 
-    def apply_state(self, wid: str, edits: dict, player) -> bool:
-        """Replace a world's edits + player wholesale (used by revert)."""
+    def apply_state(self, wid: str, edits: dict, player, mines: dict | None = None) -> bool:
+        """Replace a world's edits + player (+ mine ownership) wholesale (used by
+        revert)."""
         w = self._load(wid)
         if not w:
             return False
         with _LOCK:
             w["edits"] = dict(edits or {})
             w["player"] = player
+            if mines is not None:
+                w["mines"] = dict(mines)
+            else:
+                # Pre-metadata snapshot: keep only owners whose coordinate still
+                # holds an armed mine, so stale entries can't linger after a
+                # rewind (an ownerless armed mine can fire on its own arming
+                # player — see _track_mine).
+                w["mines"] = {k: o for k, o in (w.get("mines") or {}).items()
+                              if w["edits"].get(k) in self.PROX_ARMED}
             w["lastPlayed"] = _now()
             self._rev[wid] = self._rev.get(wid, 0) + 1
             self._index.pop(wid, None)      # edits replaced wholesale; rebuild lazily
@@ -329,7 +389,11 @@ class WorldStore:
             rev = self._rev.get(wid, 0)
             if self._snap_rev.get(wid) == rev:
                 return None
-            return rev, dict(w.get("edits") or {}), w.get("player")
+            meta = {k: w.get(k) for k in ("name", "seed", "created", "owner",
+                                          "ownerName", "public", "peaceful")}
+            meta["village"] = bool(w.get("village", False))
+            return (rev, dict(w.get("edits") or {}), w.get("player"),
+                    dict(w.get("mines") or {}), meta)
 
     def maybe_snapshot(self, wid: str):
         """Capture a snapshot if enough time has passed since the last one. Cheap
@@ -343,8 +407,9 @@ class WorldStore:
             return
         state = self._snapshot_state(wid, w)
         if state:
-            rev, edits, player = state
-            self.snapshots.capture(wid, edits, player, label="auto")
+            rev, edits, player, mines, meta = state
+            self.snapshots.capture(wid, edits, player, label="auto",
+                                   mines=mines, meta=meta)
             self._snap_rev[wid] = rev
 
     def snapshot_now(self, wid: str, label: str = "") -> dict | None:
@@ -359,8 +424,9 @@ class WorldStore:
         state = self._snapshot_state(wid, w)
         if not state:
             return None
-        rev, edits, player = state
-        snap = self.snapshots.capture(wid, edits, player, label=label)
+        rev, edits, player, mines, meta = state
+        snap = self.snapshots.capture(wid, edits, player, label=label,
+                                      mines=mines, meta=meta)
         self._snap_rev[wid] = rev
         return snap
 

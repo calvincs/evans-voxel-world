@@ -375,7 +375,8 @@ async def revert_world(wid: str, body: Revert, request: Request):
     try:
         # Both store calls hit the disk; keep them off the event loop.
         await asyncio.to_thread(store.snapshot_now, wid, label="before rewind")  # so a rewind is undoable
-        await asyncio.to_thread(store.apply_state, wid, snap["edits"], snap.get("player"))
+        await asyncio.to_thread(store.apply_state, wid, snap["edits"], snap.get("player"),
+                                snap.get("mines"))
         await _kick_room(wid)                               # boot everyone out
     finally:
         _reverting.discard(wid)
@@ -456,6 +457,8 @@ def world_chunk(wid: str, cx: int, cz: int, request: Request):
 @app.post("/api/worlds/{wid}/edit")
 def world_edit(wid: str, edit: Edit, request: Request):
     access_or_error(request, wid)
+    if wid in _reverting:                # same gate the WS edit path has
+        raise HTTPException(409, "world is being rewound")
     if not _valid_edit(edit.x, edit.y, edit.z, edit.block):
         raise HTTPException(400, "bad edit")
     store.set_block(wid, edit.x, edit.y, edit.z, edit.block)
@@ -465,6 +468,8 @@ def world_edit(wid: str, edit: Edit, request: Request):
 @app.post("/api/worlds/{wid}/edits")
 def world_edits(wid: str, payload: Edits, request: Request):
     u, _ = access_or_error(request, wid)
+    if wid in _reverting:
+        raise HTTPException(409, "world is being rewound")
     items = [(e.x, e.y, e.z, e.block) for e in payload.edits[:MAX_EDIT_BATCH]
              if _valid_edit(e.x, e.y, e.z, e.block)]
     store.set_blocks(wid, items, u["name"])
@@ -474,6 +479,8 @@ def world_edits(wid: str, payload: Edits, request: Request):
 @app.post("/api/worlds/{wid}/player")
 def world_player(wid: str, state: PlayerState, request: Request):
     access_or_error(request, wid)
+    if wid in _reverting:
+        raise HTTPException(409, "world is being rewound")
     store.set_player(wid, state.model_dump())
     return {"ok": True}
 
