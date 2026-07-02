@@ -4,6 +4,39 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Creatures move to the server
+
+**Why:** the first cut of shared creatures made one player's browser the
+simulator. That browser could be throttled in a hidden tab, freeze on the
+death screen, or leave mid-chase — degrading the world for everyone else.
+
+**What changed:**
+- **The server now runs every creature's brain** (`server/creatures.py` — a
+  faithful Python port of the client AI: wander, day/night hunter temperament,
+  A* corner pathfinding with the doorway fix, cliff/water sense, grazer
+  flight, villagers keeping to town, squid depth-chase). A 10 Hz loop in
+  `server/main.py` simulates each world that has players and streams
+  snapshots, death effects, and bites; sims park (with a final checkpoint)
+  when their world empties.
+- **Clients are pure renderers** — `static/js/mobs.js` keeps only bodies,
+  animation, hurt flashes, villager chatter, and aim-picking; a swing sends
+  "I hit creature X" and the server applies it. No owner election, no client
+  streaming, no dependence on anyone's tab.
+- Creatures read the real world server-side (terrain + edits composed per
+  chunk, invalidated as blocks change), so a TNT crater instantly changes
+  where a wolf can walk. Day/night on the server matches the client sky
+  formula exactly.
+- Persistence is now trivially safe: hatch/death update the world file
+  immediately; positions checkpoint every 5 s server-side.
+- New localhost-only `POST /api/admin/wildlife` pauses/rescues automatic wild
+  spawning (parent switch; the tests use it to keep arenas deterministic).
+- Tests: new `tools/test_creature_ai.py` — 19 pure-Python AI scenario checks
+  (pit pursuit, doorway pathing, squid dive, flee, temperament, eggs, bite
+  routing) that run in seconds with no browser, replacing the retired
+  `test_mob_ai.py`. The two-player sync test now proves the stream survives a
+  player leaving; the village test observes real server-spawned villagers.
+  Full suite green.
+
 ## 2026-07-02 — Shared, persistent creatures
 
 **Why:** creatures were simulated per-browser — two kids in the same world

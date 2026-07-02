@@ -138,15 +138,16 @@ pause screen) turns it off instantly, for everyone at once. Villagers wander
 their village; give one a poke and they'll say something. Survive a real night
 and dawn counts it for you ("🌅 Night 12 survived!").
 
-**Everyone sees the same creatures.** One player per world (the first one in —
-the "sim owner") runs the creature brains and streams them to the others, so a
-wolf chasing your brother is the same wolf on both screens; if the owner
-leaves, the next player takes over without a hiccup. Creatures hatched from
-**spawn eggs** also *persist*: fill a room with wolves, leave, come back — or
-have a friend join later — and the wolves are still there (they're saved with
-the world, included in snapshots/rewind, and they never wander-despawn like
-wild animals do). Hostiles hunt whichever player is nearest, not just the
-owner.
+**Everyone sees the same creatures — the SERVER runs their brains.** The
+creature simulation lives in `server/creatures.py` and streams ~10 snapshots a
+second to every player in a world, so a wolf chasing your brother is the same
+wolf on both screens. No player's browser matters: tabs can be hidden, anyone
+can leave, and the world keeps living. Creatures hatched from **spawn eggs**
+*persist*: fill a room with wolves, leave, come back — or have a friend join
+later — and the wolves are still there (saved with the world, included in
+snapshots/rewind, never wander-despawning like wild animals do). Hostiles hunt
+whichever player is nearest. A localhost-only switch can pause wild spawning
+entirely (`POST /api/admin/wildlife`), handy for testing or a calmer world.
 
 A round **minimap** sits in the top-right corner — you're the white arrow at
 the centre, the orange ring is the village, and friends show as coloured dots.

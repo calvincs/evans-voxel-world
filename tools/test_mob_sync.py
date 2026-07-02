@@ -2,13 +2,13 @@
 """
 Two-client creature-sync test: launches an ISOLATED server + one headless
 Chrome, opens TWO game pages in it (two players in the same world), and
-asserts the sim-owner model end to end:
+asserts the SERVER-side simulation end to end:
 
-  - second player becomes a mirror of the first (the sim owner)
   - a hatched creature appears for BOTH players in the same place, and is
     persisted server-side
-  - a mirror player's attacks kill it for everyone (and un-persist it)
-  - when the owner leaves, the mirror is promoted and keeps the creatures
+  - either player's attacks kill it for everyone (and un-persist it)
+  - creatures keep living when a player leaves (the server simulates, so no
+    client matters)
   - a full leave + rejoin still finds the placed creatures (persistence)
 
 Run:  .venv/bin/python tools/test_mob_sync.py
@@ -123,29 +123,33 @@ def main():
              "--mute-audio", f"http://localhost:{PORT}/?demo"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+        # Deterministic stage: no wild spawns; the only creatures are the ones
+        # this test hatches. Localhost-only admin switch.
+        urllib.request.urlopen(urllib.request.Request(
+            f"http://localhost:{PORT}/api/admin/wildlife", method="POST",
+            data=json.dumps({"on": False, "clear": True}).encode(),
+            headers={"Content-Type": "application/json"}), timeout=5)
+
         browser = browser_cdp()
         a_id = next(t["id"] for t in targets() if t.get("type") == "page")
         A = page_for(a_id)
         A.wait_for(GAME_READY, 90, "player A boot")
-        A.eval("game.mobs.spawnTimer = 1e9; game.mobs.clear()")   # deterministic stage
 
         # --- second player joins the same world --------------------------------
         b_id = browser.send("Target.createTarget",
                             url=f"http://localhost:{PORT}/?demo")["result"]["targetId"]
         B = page_for(b_id)
         B.wait_for(GAME_READY, 90, "player B boot")
-        A.wait_for("game.mobs.role === 'owner' && game.mobs.peers === 1", 20,
-                   "A is sim owner with a peer")
-        B.wait_for("game.mobs.role === 'mirror'", 20, "B is a mirror")
-        check("first player simulates, second mirrors", True)
+        check("two players in the world", True)
 
         # --- hatch on A -> same creature on both + persisted --------------------
         A.eval("""(() => {
           const p = game.player.pos;
           game.mobs.hatchEgg('wolf', Math.floor(p.x) + 2, Math.floor(p.y) + 1, Math.floor(p.z));
         })()""")
-        A.wait_for("game.mobs.mobs.some(m => m.cid)", 15, "wolf hatched on A")
-        cid = A.eval("game.mobs.mobs.find(m => m.cid).cid")
+        A.wait_for("game.mobs.mobs.some(m => m.nid && m.nid[0] === 'c')", 15,
+                   "wolf hatched (streamed back to A)")
+        cid = A.eval("game.mobs.mobs.find(m => m.nid && m.nid[0] === 'c').nid")
         check("hatched wolf has a server id", isinstance(cid, str) and cid.startswith("c"), cid)
         B.wait_for(f"game.mobs.mobs.some(m => m.nid === '{cid}')", 15, "wolf visible on B")
         check("both players see the same wolf", True)
@@ -165,37 +169,45 @@ def main():
                            ".creatures)()")
         check("wolf persisted in the world file", cid in (persisted or {}), persisted)
 
-        # --- mirror player kills it for everyone --------------------------------
+        # --- the second player kills it for everyone -----------------------------
         for _ in range(3):   # 3 x 4 dmg > wolf 12 hp
             B.eval(f"game.net.sendMobHit('{cid}', 4, 1, 0)")
             time.sleep(0.3)
         A.wait_for(f"!game.mobs.mobs.some(m => m.nid === '{cid}')", 15, "wolf dead on A")
         B.wait_for(f"!game.mobs.mobs.some(m => m.nid === '{cid}')", 15, "wolf gone on B")
-        check("a mirror player's attacks kill it for everyone", True)
+        check("either player's attacks kill it for everyone", True)
         persisted = A.eval("(async () => (await (await fetch(game.world.base + '/config')).json())"
                            ".creatures)()")
         check("dead wolf removed from the world file", cid not in (persisted or {}), persisted)
 
-        # --- owner leaves -> mirror promoted, creatures survive -----------------
+        # --- a player leaves; the server keeps simulating -------------------------
         A.eval("""(() => {
           const p = game.player.pos;
           game.mobs.hatchEgg('wolf', Math.floor(p.x) + 2, Math.floor(p.y) + 1, Math.floor(p.z));
           game.mobs.hatchEgg('pig',  Math.floor(p.x) - 2, Math.floor(p.y) + 1, Math.floor(p.z));
         })()""")
-        B.wait_for("game.mobs.mobs.filter(m => m.cid).length === 2", 15,
-                   "both new creatures visible on B")
+        CID_COUNT = "game.mobs.mobs.filter(m => m.nid && m.nid[0] === 'c').length"
+        B.wait_for(f"{CID_COUNT} === 2", 15, "both new creatures visible on B")
+        B.eval("""(() => {
+          window._snaps = 0;
+          const old = game.net.handlers.onMobs;
+          game.net.handlers.onMobs = (l) => { window._snaps++; old(l); };
+        })()""")
         browser.send("Target.closeTarget", targetId=a_id)
-        B.wait_for("game.mobs.role === 'owner'", 20, "B promoted to sim owner")
-        check("owner left; mirror promoted seamlessly", True)
-        check("promoted owner kept the creatures", B.eval(
-            "game.mobs.mobs.filter(m => m.cid).length") == 2)
+        time.sleep(2)
+        before = B.eval("window._snaps")
+        time.sleep(2)
+        check("stream keeps flowing after a player leaves",
+              B.eval("window._snaps") > before)
+        check("creatures unaffected by the departure", B.eval(CID_COUNT) == 2)
 
         # --- full leave + rejoin: persistence ------------------------------------
         B.eval("location.reload()")
         B.wait_for(GAME_READY, 90, "B re-boot")
-        B.wait_for("game.mobs.mobs.filter(m => m.cid).length === 2", 20,
+        B.wait_for(f"{CID_COUNT} === 2", 20,
                    "persisted creatures after full leave + rejoin")
-        types = sorted(B.eval("game.mobs.mobs.filter(m => m.cid).map(m => m.type)") or [])
+        types = sorted(B.eval(
+            "game.mobs.mobs.filter(m => m.nid && m.nid[0] === 'c').map(m => m.type)") or [])
         check("the wolf room survives leave + rejoin", types == ["pig", "wolf"], types)
 
         print(f"\nall {PASS} checks passed")

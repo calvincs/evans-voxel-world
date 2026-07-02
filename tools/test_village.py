@@ -3,7 +3,8 @@
 Checks, in the real client against a freshly created demo world:
   1. world config carries village info,
   2. village blocks stream in (planks/glass/cobble/glowstone counts, well water),
-  3. villagers of mixed sorts spawn while the player is in town,
+  3. the SERVER spawns villagers of mixed sorts while the player is in town
+     (creatures are server-simulated and streamed; the client just renders),
   4. they wander but keep close to the village,
 and captures a screenshot of the village for visual inspection.
 """
@@ -19,7 +20,7 @@ DEBUG_PORT = 9223
 GAME_URL = "localhost:8899"
 SHOT = sys.argv[1] if len(sys.argv) > 1 else "village.png"
 
-SIM_JS = r"""
+BLOCKS_JS = r"""
 (() => {
   const G = window.game;
   const { world, mobs } = G;
@@ -34,36 +35,37 @@ SIM_JS = r"""
         counts[b] = (counts[b] || 0) + 1;
       }
   const wellWater = world.getBlock(v.x, v.ground + 1, v.z) === 7;
-
-  mobs.clear();
-  mobs.spawnTimer = 0;
-  const fake = { pos: { x: v.x + 0.5, y: v.ground + 1, z: v.z + 6.5 },
-                 locked: false, frozen: true, dead: false };
-  const dt = 1 / 60;
-  let ticks = 0;
-  const isV = (m) => m.t.villager;
-  while (ticks < 240 * 60 && mobs.mobs.filter(isV).length < 4) { mobs.update(dt, fake, 1); ticks++; }
-  const vills = mobs.mobs.filter(isV);
-  const kinds = [...new Set(vills.map((m) => m.type))];
-
-  let maxDist = 0;
-  for (let i = 0; i < 60 * 60; i++) {                 // a sim-minute of wandering
-    mobs.update(dt, fake, 1);
-    for (const m of mobs.mobs) {
-      if (!isV(m)) continue;
-      maxDist = Math.max(maxDist, Math.hypot(m.pos.x - (v.x + 0.5), m.pos.z - (v.z + 0.5)));
-    }
-  }
-  const out = {
+  return JSON.stringify({
     village: v, wellWater,
     planks: counts[8] || 0, glass: counts[9] || 0, brick: counts[10] || 0,
     cobble: counts[11] || 0, glowstone: counts[20] || 0,
-    villagers: vills.length, kinds,
-    aliveAfterMinute: mobs.mobs.filter(isV).length,
-    maxDistFromCentre: +maxDist.toFixed(1),
-    secondsToFill: +(ticks / 60).toFixed(1),
-  };
-  return JSON.stringify(out);
+  });
+})()
+"""
+
+# Move the REAL player into the village — the server spawns villagers while a
+# player is in town, and streams them back to every client.
+GOTO_VILLAGE_JS = r"""
+(() => {
+  const G = window.game, v = G.mobs.village;
+  G.player.pos.set(v.x + 0.5, v.ground + 3, v.z + 6.5);
+  G.player.vel.set(0, 0, 0);
+  return 'moved';
+})()
+"""
+
+VILLAGER_STATE_JS = r"""
+(() => {
+  const G = window.game, v = G.mobs.village;
+  const vills = G.mobs.mobs.filter((m) => m.t.villager);
+  let maxDist = 0;
+  for (const m of vills)
+    maxDist = Math.max(maxDist, Math.hypot(m.pos.x - (v.x + 0.5), m.pos.z - (v.z + 0.5)));
+  return JSON.stringify({
+    villagers: vills.length,
+    kinds: [...new Set(vills.map((m) => m.type))],
+    maxDist: +maxDist.toFixed(1),
+  });
 })()
 """
 
@@ -139,20 +141,45 @@ def main():
         evaluate("const w=window.game.mobs.village; window.game.world.update(w.x, w.z); 'load'")
         time.sleep(1)
 
-    r = evaluate(SIM_JS)
+    # Villagers are server-spawned: make sure wildlife is on (a mine test may
+    # have paused it on this shared instance).
+    urllib.request.urlopen(urllib.request.Request(
+        f"http://{GAME_URL}/api/admin/wildlife", method="POST",
+        data=json.dumps({"on": True}).encode(),
+        headers={"Content-Type": "application/json"}), timeout=5)
+
+    r = evaluate(BLOCKS_JS)
     res = val(r)
     if not isinstance(res, str):
         print("FAIL:", json.dumps(r)[:1500])
         sys.exit(1)
     results = json.loads(res)
-    print(json.dumps(results, indent=2))
     if "error" in results:
+        print(json.dumps(results))
         sys.exit(3)
+
+    # Walk the real player into town and watch the server populate it.
+    evaluate(GOTO_VILLAGE_JS)
+    state = {"villagers": 0, "kinds": [], "maxDist": 0}
+    filled_after = None
+    max_dist = 0.0
+    for sec in range(75):
+        state = json.loads(val(evaluate(VILLAGER_STATE_JS)))
+        max_dist = max(max_dist, state["maxDist"])
+        if state["villagers"] >= 4 and filled_after is None:
+            filled_after = sec
+        if filled_after is not None and sec >= filled_after + 15:
+            break                          # 15s of wander observation after fill
+        time.sleep(1)
+    results.update(villagers=state["villagers"], kinds=state["kinds"],
+                   maxDistFromCentre=max_dist,
+                   secondsToFill=filled_after if filled_after is not None else -1)
+    print(json.dumps(results, indent=2))
 
     ok = (results["wellWater"] and results["planks"] > 50 and results["glass"] > 5
           and results["cobble"] > 30 and results["glowstone"] >= 2
           and results["villagers"] >= 4 and len(results["kinds"]) >= 2
-          and results["aliveAfterMinute"] >= 4
+          and results["secondsToFill"] >= 0
           and results["maxDistFromCentre"] < results["village"]["radius"] + 10)
     print("RESULT:", "ALL PASS" if ok else "SOME FAILED")
 

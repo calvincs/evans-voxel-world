@@ -533,9 +533,8 @@ async function startGame(worldId, demo) {
   world.update(spawn.x, spawn.z);   // preload spawn chunks
 
   const mobs = new Mobs(scene, world, assets.textures, (m) => toast(m, 3500));
-  mobs.peaceful = !!cfg.peaceful;                         // world toggle: friendly animals only
-  mobs.village = cfg.village || null;                     // where villagers live
-  mobs.loadPersistent(cfg.creatures);                     // placed creatures live here forever
+  mobs.peaceful = !!cfg.peaceful;                         // UI state; server enforces it
+  mobs.village = cfg.village || null;                     // data only (tests, future UI)
   player.mobs = mobs;                                     // let a swing hit creatures
 
   // Health HUD + damage feedback + death.
@@ -648,14 +647,9 @@ async function startGame(worldId, demo) {
       }
     },
     onVoice: (m) => voice.handle(m),
-    // --- Creature sync -------------------------------------------------------
-    // The server names one client the "sim owner"; it runs the creatures and
-    // streams them, so every player sees the same animals in the same places.
-    onMobSim: (owner) => mobs.setRole(owner === net.myId ? 'owner' : 'mirror'),
+    // --- Creatures (simulated on the SERVER; we render its stream) -----------
     onMobs: (list) => mobs.applySnapshot(list),
-    onMobHatch: (m) => mobs.hatchFromNet(m.id, m.t, m.x, m.y, m.z),
-    onMobGone: (id) => mobs.removeById(id),
-    onMobHit: (m) => mobs.applyRemoteHit(m.i, m.dmg, m.dx, m.dz),
+    onMobDie: (m) => mobs.onDeath(m.x, m.y, m.z, m.t),
     onMobBite: (m) => {
       if (!dead) player.hurt(m.amount, { from: { x: m.x, z: m.z }, source: m.source });
     },
@@ -677,9 +671,7 @@ async function startGame(worldId, demo) {
   });
   world.net = net;
   net.onDown = () => connectionCheckNow();   // socket dropped -> check the server now
-  mobs.net = net;
-  mobs.remotes = remotes;
-  mobs.onBite = (pid, amount, x, z, source) => net.sendMobBite(pid, amount, x, z, source);
+  mobs.net = net;                            // hits + egg hatches go to the server
 
   // Proximity voice chat (WebRTC). Peer audio is positioned by where that
   // player is, via remotes' interpolated positions.
@@ -706,7 +698,6 @@ async function startGame(worldId, demo) {
   }
 
   function renderRoster() {
-    mobs.peers = roster.size;    // the creature stream only runs with listeners
     const el = $('roster');
     el.innerHTML = '';
     rosterEls.clear();
@@ -997,13 +988,13 @@ async function startGame(worldId, demo) {
     requestAnimationFrame(loop);
     lastFrame = performance.now();
     if (offline || dead) {
-      // Disconnected: fully frozen. Dead: the death screen is up but the world
-      // lives on — if we're the sim owner, the room's creatures must not
-      // freeze while we pick ourselves up.
+      // Disconnected: fully frozen. Dead: the death screen is up but the
+      // world lives on around you (creatures are server-simulated) — keep
+      // rendering their movement while you pick yourself up.
       if (!offline) {
         const dt0 = Math.min(clock.getDelta(), 0.1);
         sky.update(dt0, player.pos);
-        mobs.update(dt0, player, sky.daylight);
+        mobs.update(dt0);
         remotes.update(dt0);
       }
       renderer.render(scene, camera);
@@ -1018,7 +1009,7 @@ async function startGame(worldId, demo) {
     audio.setAmbientDaylight(sky.daylight);   // birds by day, crickets at night
     dawnCheck(dt);
     world.update(player.pos.x, player.pos.z, dt, sky.daylight);
-    mobs.update(dt, player, sky.daylight);
+    mobs.update(dt);
     gear.update(dt);                  // mines + elevators (after player & mobs)
 
     // Multiplayer sync.
@@ -1052,11 +1043,11 @@ async function startGame(worldId, demo) {
   }
   loop();
 
-  // rAF pauses in hidden tabs — but if this client is the sim owner, the whole
-  // room's creatures would freeze with it. A coarse background tick keeps the
-  // simulation (and its network stream) alive; browsers throttle hidden-tab
-  // timers to ~1 Hz, which is plenty to keep wolves biting. Rendering stays
-  // rAF-only.
+  // rAF pauses in hidden tabs. The creature simulation lives on the SERVER so
+  // nothing important freezes with us — this coarse background tick just keeps
+  // the local pieces fresh while hidden: creature interpolation follows the
+  // stream, and our mines keep their sensors watching. Browsers throttle
+  // hidden-tab timers to ~1 Hz, which is plenty.
   setInterval(() => {
     if (offline) return;
     const now = performance.now();
@@ -1064,7 +1055,7 @@ async function startGame(worldId, demo) {
     const dt = Math.min((now - lastFrame) / 1000, 0.5);
     lastFrame = now;
     sky.update(dt, player.pos);                 // wall-clock anchored; daylight stays true
-    mobs.update(dt, player, sky.daylight);
+    mobs.update(dt);
     gear.update(dt);                            // mines keep watching too
   }, 250);
 }

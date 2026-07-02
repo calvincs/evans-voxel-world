@@ -67,7 +67,16 @@ def main():
         ok = ok and good
         print(f"{'PASS' if good else 'FAIL'}  {label}: {value!r}")
 
+    def set_wildlife(on, clear=False):
+        # Server-side wild spawns would wander into the mine arenas.
+        urllib.request.urlopen(urllib.request.Request(
+            f"http://{GAME_URL}/api/admin/wildlife", method="POST",
+            data=json.dumps({"on": on, "clear": clear}).encode(),
+            headers={"Content-Type": "application/json"}), timeout=5)
+
     wait_ready()
+    set_wildlife(False, clear=True)
+    time.sleep(0.5)
     check("logged-in name known", ev("window.game.gear.myName.length > 0"))
 
     # Arm a mine near the player (inside the adoption scan range), then reload.
@@ -149,6 +158,7 @@ def main():
     check("anyone else trips it", ev(
         "window.game.world.getBlock(M.x2, M.PY + 1, M.z2) === 0"))
 
+    set_wildlife(True)
     print("RESULT:", "ALL PASS" if ok else "SOME FAILED")
     sys.exit(0 if ok else 2)
 

@@ -12,6 +12,15 @@ import websocket
 DEBUG_PORT = 9223
 GAME_URL = "localhost:8899"
 
+
+def set_wildlife(on, clear=False):
+    """Server-side wild spawns would wander into the arenas — pause them (the
+    parked test pigs are local dummies, unaffected)."""
+    urllib.request.urlopen(urllib.request.Request(
+        f"http://{GAME_URL}/api/admin/wildlife", method="POST",
+        data=json.dumps({"on": on, "clear": clear}).encode(),
+        headers={"Content-Type": "application/json"}), timeout=5)
+
 TEST_JS = r"""
 (() => {
   const G = window.game;
@@ -183,7 +192,10 @@ def main():
         sys.exit(1)
     print("game ready — running mine/TNT scenarios...")
 
+    set_wildlife(False, clear=True)
+    time.sleep(0.5)                     # let the empty snapshot reach the client
     r = evaluate(TEST_JS)
+    set_wildlife(True)
     res = r.get("result", {}).get("result", {})
     if res.get("type") != "string":
         print("FAIL:", json.dumps(r)[:2000])
