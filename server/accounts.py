@@ -73,6 +73,8 @@ class UserStore:
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(self.users, f)
+            f.flush()
+            os.fsync(f.fileno())     # survive power loss, not just a crash
         os.replace(tmp, self.path)   # atomic on POSIX
 
     def _new_uid(self) -> str:
@@ -188,6 +190,8 @@ class SessionStore:
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(self.sessions, f)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, self.path)
 
     def _purge_expired(self):

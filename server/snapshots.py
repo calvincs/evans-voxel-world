@@ -72,6 +72,8 @@ class SnapshotStore:
             tmp = self._path(wid, snap["id"]) + ".tmp"
             with open(tmp, "w") as f:
                 json.dump(snap, f)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self._path(wid, snap["id"]))
         self._last_ts[wid] = snap["ts"]
         self.prune(wid)

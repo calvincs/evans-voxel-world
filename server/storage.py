@@ -99,6 +99,11 @@ class WorldStore:
         tmp = self._path(world["id"]) + ".tmp"
         with open(tmp, "w") as f:
             json.dump(world, f)
+            # fsync before the rename: os.replace is atomic against a process
+            # crash, but on power loss the journal can commit the rename before
+            # the data blocks land — leaving a zero-length world file.
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, self._path(world["id"]))
 
     def _write(self, world: dict):
