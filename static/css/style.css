@@ -516,6 +516,18 @@ body:not(.in-game) #talk { display: none !important; }
 
 .auth-error { color: #c2492f; font-size: 14px; min-height: 18px; margin: 10px 0 4px; }
 
+/* Password field + show/hide eye. Seeing what you typed beats a mystery
+   "wrong password" for a kid still learning to type. */
+.pass-row { display: flex; gap: 8px; }
+.pass-row input { flex: 1; min-width: 0; }
+.eye {
+  font: inherit; font-size: 18px; width: 46px;
+  border: 2px solid #c3d4ee; border-radius: 10px;
+  background: #fff; color: #5a6b85; cursor: pointer;
+}
+.eye:hover { border-color: #2f6fd6; }
+.eye.on { background: #dbe7ff; border-color: #2f6fd6; }
+
 .primary-btn {
   font: inherit; font-size: 20px; font-weight: bold;
   padding: 11px 40px; border: none; border-radius: 12px;

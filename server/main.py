@@ -219,6 +219,11 @@ class Profile(BaseModel):
     newPassword: str | None = None
 
 
+class AdminReset(BaseModel):
+    username: str
+    newPassword: str
+
+
 def world_or_404(wid: str) -> dict:
     w = store.get(wid)
     if not w:
@@ -270,6 +275,25 @@ def auth_logout(request: Request, response: Response):
     sessions.drop(request.cookies.get(COOKIE))
     response.delete_cookie(COOKIE, path="/")
     return {"ok": True}
+
+
+@app.post("/api/admin/reset-password")
+def admin_reset_password(body: AdminReset, request: Request):
+    """Parent rescue for a forgotten password. Only accepted from the machine
+    the server runs on — a kid's tablet can never reach it. Use
+    tools/reset_password.py, which calls this (or edits the file directly when
+    the server is down)."""
+    host = request.client.host if request.client else ""
+    if host not in ("127.0.0.1", "::1"):
+        raise HTTPException(403, "localhost only")
+    try:
+        u = users.reset_password(body.username, body.newPassword)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not u:
+        raise HTTPException(404, "no such user")
+    log.warning("admin: password reset for %r from localhost", body.username)
+    return {"ok": True, "user": UserStore.public(u)}
 
 
 @app.get("/api/users")

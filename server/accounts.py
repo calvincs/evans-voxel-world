@@ -145,6 +145,23 @@ class UserStore:
             return u
         return None
 
+    def reset_password(self, username: str, new_password: str) -> dict | None:
+        """Set a new password for an account by name, bypassing the old one —
+        the parent-rescue path for "I forgot my password". Only reachable from
+        the server machine itself (the localhost admin endpoint / CLI), never
+        from the game UI."""
+        if not new_password or len(new_password) < 3:
+            raise ValueError("Password must be at least 3 characters.")
+        with self._lock:
+            u = self.by_username(username)
+            if not u:
+                return None
+            salt = secrets.token_bytes(16)
+            u["pw_salt"] = salt.hex()
+            u["pw_hash"] = _hash_pw(new_password, salt)
+            self._write()
+        return u
+
     def update_profile(self, uid: str, name=None, color=None, new_password=None) -> dict | None:
         """Update the caller's own profile. Callers pass only the session uid, so
         one user can never edit another."""

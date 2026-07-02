@@ -53,7 +53,10 @@
           <select id="auth-select" class="auth-select"></select>
         </div>
         <input id="auth-user" type="text" maxlength="20" placeholder="Username" autocomplete="username" />
-        <input id="auth-pass" type="password" maxlength="64" placeholder="Password" autocomplete="current-password" />
+        <div class="pass-row">
+          <input id="auth-pass" type="password" maxlength="64" placeholder="Password" autocomplete="current-password" />
+          <button id="auth-eye" class="eye" type="button" title="Show / hide the password">👁</button>
+        </div>
         <div id="auth-color-row" class="color-row hidden">
           <span class="color-label">Pick your color</span>
           <div id="auth-colors" class="swatches"></div>
@@ -74,7 +77,10 @@
         <label class="field-label">Character color</label>
         <div id="prof-colors" class="swatches"></div>
         <label class="field-label">New password <span class="hint">(leave blank to keep)</span></label>
-        <input id="prof-pass" type="password" maxlength="64" placeholder="New password" autocomplete="new-password" />
+        <div class="pass-row">
+          <input id="prof-pass" type="password" maxlength="64" placeholder="New password" autocomplete="new-password" />
+          <button id="prof-eye" class="eye" type="button" title="Show / hide the password">👁</button>
+        </div>
       </div>
       <p id="prof-error" class="auth-error"></p>
       <div class="buttons">

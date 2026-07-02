@@ -4,6 +4,22 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Forgotten passwords are no longer a dead end
+
+**Why:** a kid who forgot their password was hard-locked out — the game had no
+recovery path at all, and no way to even see what you were typing.
+
+**What changed:**
+- New 👁 show-password button on the sign-in and profile password fields
+  (`static/index.html`, `static/js/main.js`, `static/css/style.css`).
+- New `tools/reset_password.py` — parent rescue, run on the host machine:
+  `tools/reset_password.py evan` (prompts) or `... evan newpass`. Talks to the
+  running server so the reset is live instantly; if the server is down it
+  edits `data/users.json` directly.
+- New `POST /api/admin/reset-password` endpoint that only accepts requests
+  from localhost — kids' tablets can never reach it (verified: LAN requests
+  get 403).
+
 ## 2026-07-02 — Backups, auto-restart, snapshot housekeeping
 
 **Why:** snapshots protect against bad edits, not a dying disk — and a server

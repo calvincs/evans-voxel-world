@@ -56,6 +56,18 @@ async function fetchMe() {
 }
 
 // --- Sign in / create account ------------------------------------------------
+// 👁 button: show/hide what's typed in a password field.
+function wireEye(eyeId, inputId) {
+  const eye = $(eyeId), input = $(inputId);
+  if (!eye || !input) return;
+  eye.onclick = () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    eye.classList.toggle('on', show);
+    input.focus();
+  };
+}
+
 function buildSwatches(container, initial, onPick) {
   container.innerHTML = '';
   COLOR_PALETTE.forEach((c) => {
@@ -86,6 +98,7 @@ async function showAuth() {
     let mode = 'login';
     let color = COLOR_PALETTE[0];
     buildSwatches($('auth-colors'), color, (c) => { color = c; });
+    wireEye('auth-eye', 'auth-pass');
 
     // Fill the account picker (option value = username, label = display name).
     select.innerHTML = '';
@@ -166,6 +179,7 @@ function openProfile() {
   passEl.value = '';
   err.textContent = '';
   buildSwatches($('prof-colors'), color, (c) => { color = c; });
+  wireEye('prof-eye', 'prof-pass');
   panel.classList.remove('hidden');
   $('prof-cancel').onclick = () => panel.classList.add('hidden');
   $('prof-save').onclick = async () => {
