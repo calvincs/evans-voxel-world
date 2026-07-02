@@ -4,6 +4,36 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — Water finds its level
+
+**Why:** placed water just froze wherever it was clicked — even floating in
+mid-air. Pouring water into a hole should fill the deepest part first.
+
+**What changed (`static/js/engine/world.js`):**
+- Water now settles: it flows down and sideways freely, and rises only
+  through water it's already part of (never up a dry wall). On any
+  disturbance — pouring a block, breaking a block next to or under water, a
+  TNT crater — the pond finds every cell it can reach and redistributes into
+  the lowest ones, nearest-first. So a poured block streams to the deepest
+  cell, basins fill layer by layer, wells stack from the bottom, a breached
+  pond drains along your channel, and a column falls when its floor breaks.
+- Volume is conserved exactly: one placed block is one block of water,
+  through every animated frame of the flow (moves apply a few per frame, so
+  you see it run). Separate pools further down a hole are treated as
+  occupied ground — new water rests on top of them.
+- The infinite "refill" behaviour is now reserved for water genuinely
+  connected to the world's water table: breaking into the sea or a lake
+  (surface at sea level) still floods the gap for free, but a kid's own
+  poured pool below sea level no longer turns infinite when they dig at it.
+- Settling runs only on the client that caused the disturbance and syncs to
+  everyone (and the server's creatures) as ordinary edit batches, exactly
+  like the existing dam-breach flood.
+- New `tools/test_water.py` — five headless scenarios (deepest-cell pour,
+  layer fill, well stacking, breach draining, floor-break fall) with volume
+  checks; wired into the suite. It caught one real planner bug before ship:
+  water falling toward a separate pocket below tried to occupy it instead of
+  resting on top.
+
 ## 2026-07-02 — Review close-out: last hardening + tablet polish
 
 **Why:** five small items from the original review were still open, plus two

@@ -176,6 +176,14 @@ pumpkin, snow…). Three are special:
   after dark; nearby blocks are lit by real warm point-lights that follow the
   closest glowstones to you.
 
+**Water flows.** Pour a water block into a hole and it streams downhill to the
+deepest spot; keep pouring and the basin fills up layer by layer. Break a
+pond's wall and it drains along the channel you dug; break the floor beneath
+it and it falls through. Poured water is *finite* — every block you place is
+exactly one block of water, wherever it ends up — while water connected to
+the sea or a lake (whose surface sits at the world's water level) refills
+itself, like a real water table.
+
 The Firestone strikes more than TNT (see `static/js/gear.js`):
 
 - **Pumpkins** — strike one and its carved face lights up like a

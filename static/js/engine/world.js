@@ -13,6 +13,13 @@ const floorDiv = (a, b) => Math.floor(a / b);
 const FUSE = 4.0;          // seconds a TNT ticks before it blows (time to run!)
 const BLAST_RADIUS = 3.4;  // block radius destroyed
 
+// Water settling: poured water runs downhill and pools from the bottom up,
+// conserving volume — see _waterDisturb / _startSettle.
+const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+const POND_MAX = 1500;     // biggest body we re-level (larger bodies act stable)
+const BASIN_MAX = 4000;    // body + reachable air scanned per settle
+const SEA_SCAN = 400;      // budget for the "connected to the sea?" check
+
 // Glowstone lighting. Every lit fragment pays for each active point light, so
 // weak (touch) GPUs get a smaller pool — mirroring the DPR cap in renderer.js.
 const GLOW_LIGHTS = (typeof matchMedia !== 'undefined'
@@ -39,6 +46,9 @@ export class World {
     // Active water flood-fills, drained a slice per frame — a breached dam
     // fills over a few frames instead of hitching one (see _updateFloods).
     this._floods = [];
+    // Ponds waiting to find their level, and the one currently flowing.
+    this._settles = [];
+    this._settlePending = [];
 
     // Ring of chunk offsets inside the render distance, sorted nearest-first.
     // Computed once — the per-frame streaming scan reuses it.
@@ -186,8 +196,59 @@ export class World {
         }).catch(() => {/* offline is fine; world still works locally */});
       }
     }
-    // Opening a gap below sea level that touches water lets water fill it in.
-    if (persist && block === AIR && wy <= DIM.water) this._floodWater(wx, wy, wz);
+    // Water dynamics — only the client that made the edit runs them; everyone
+    // else just receives the resulting batch. Breaking next to water lets it
+    // move (refill from the sea, or drain downhill); placing water sends it
+    // flowing to the deepest reachable spot.
+    if (persist) {
+      if (block === AIR) this._waterDisturb(wx, wy, wz);
+      else if (block === WATER) this._schedSettle(wx, wy, wz);
+    }
+  }
+
+  // A cell next to water just opened up. Water connected to the world's water
+  // table — the sea and lakes, whose surface sits at DIM.water — refills for
+  // free (the ocean doesn't run dry). Anything else is finite: it settles,
+  // conserving volume, like a real puddle.
+  _waterDisturb(x, y, z) {
+    let touches = false;
+    for (const [dx, dy, dz] of N6) {
+      if (this.getBlock(x + dx, y + dy, z + dz) === WATER) { touches = true; break; }
+    }
+    if (!touches) return;
+    if (y <= DIM.water && this._connectsToSea(x, y, z)) {
+      this._floodWater(x, y, z);
+      return;
+    }
+    this._schedSettle(x, y, z);
+  }
+
+  // Breadth-first through the touching water, looking for a cell at sea-surface
+  // height. Budgeted: a body too big to scan is treated as the water table too.
+  _connectsToSea(x, y, z) {
+    const seen = new Set();
+    const q = [];
+    const push = (nx, ny, nz) => {
+      const k = `${nx},${ny},${nz}`;
+      if (!seen.has(k) && this.getBlock(nx, ny, nz) === WATER) {
+        seen.add(k);
+        q.push([nx, ny, nz]);
+      }
+    };
+    for (const [dx, dy, dz] of N6) push(x + dx, y + dy, z + dz);
+    let qi = 0;
+    while (qi < q.length) {
+      const [cx, cy, cz] = q[qi++];
+      if (cy === DIM.water) return true;
+      if (seen.size > SEA_SCAN) return true;
+      for (const [dx, dy, dz] of N6) push(cx + dx, cy + dy, cz + dz);
+    }
+    return false;
+  }
+
+  _schedSettle(x, y, z) {
+    if (this._settlePending.length >= 32) return;   // a crater schedules plenty
+    this._settlePending.push([x, y, z]);
   }
 
   // Still water fills a fresh gap that opens below sea level and touches water.
@@ -210,6 +271,124 @@ export class World {
       if (f.seen.has(sk)) return;                   // an active fill already covers it
     this._floods.push({
       seen: new Set([sk]), queue: [[sx, sy, sz]], qi: 0, filled: [], cap: 4096 });
+  }
+
+  // Re-level one pond: gather its connected water, find every cell that water
+  // could reach without climbing (down and sideways freely, upward only
+  // through water it is already part of — never up a dry wall), and
+  // redistribute the same number of blocks into the lowest of those cells.
+  // Poured water therefore streams to the deepest part of a hole, basins fill
+  // layer by layer, and a breached pond drains along the channel you dug —
+  // with volume conserved exactly. The diff is animated by _updateSettles.
+  _startSettle(sx, sy, sz) {
+    const k3 = (x, y, z) => `${x},${y},${z}`;
+    const loaded = (x, z) => this.chunks.has(key(floorDiv(x, DIM.CX), floorDiv(z, DIM.CZ)));
+
+    // The connected water body around the disturbance.
+    const body = [];
+    const bodySet = new Set();
+    const seed = (x, y, z) => {
+      const k = k3(x, y, z);
+      if (!bodySet.has(k) && loaded(x, z) && this.getBlock(x, y, z) === WATER) {
+        bodySet.add(k);
+        body.push([x, y, z]);
+      }
+    };
+    seed(sx, sy, sz);
+    for (const [dx, dy, dz] of N6) seed(sx + dx, sy + dy, sz + dz);
+    for (let i = 0; i < body.length && body.length <= POND_MAX; i++) {
+      const [x, y, z] = body[i];
+      for (const [dx, dy, dz] of N6) seed(x + dx, y + dy, z + dz);
+    }
+    if (!body.length || body.length > POND_MAX) return;   // nothing, or acts stable
+
+    // Everywhere the water can reach, breadth-first so ties fill nearest-first.
+    const seen = new Set(bodySet);
+    const cand = [];
+    const q = body.slice();
+    const push = (x, y, z) => {
+      if (y < 0 || y >= DIM.WY || !loaded(x, z)) return;
+      const k = k3(x, y, z);
+      if (seen.has(k)) return;
+      const b = this.getBlock(x, y, z);
+      if (b !== AIR && b !== WATER) return;
+      seen.add(k);
+      q.push([x, y, z]);
+    };
+    let qi = 0;
+    while (qi < q.length && cand.length < BASIN_MAX) {
+      const c = q[qi++];
+      cand.push(c);
+      const [x, y, z] = c;
+      push(x, y - 1, z);                        // water always flows down…
+      push(x + 1, y, z); push(x - 1, y, z);     // …and sideways…
+      push(x, y, z + 1); push(x, y, z - 1);
+      // …but rises only through water (pressure), never up a dry wall.
+      if (this.getBlock(x, y, z) === WATER && this.getBlock(x, y + 1, z) === WATER) {
+        push(x, y + 1, z);
+      }
+    }
+
+    // The new pond: the V lowest reachable cells (stable sort keeps the
+    // breadth-first nearest-first order within each layer). Water that isn't
+    // part of this body — a separate pocket further down the same hole — is
+    // passable but OCCUPIED: skip those cells so a poured block comes to rest
+    // on top of it instead of trying to move into it.
+    const V = body.length;
+    const order = cand.map((c, i) => [c, i]);
+    order.sort((a, b) => (a[0][1] - b[0][1]) || (a[1] - b[1]));
+    const target = new Set();
+    const fills = [];
+    let taken = 0;
+    for (let i = 0; i < order.length && taken < V; i++) {
+      const c = order[i][0];
+      const k = k3(c[0], c[1], c[2]);
+      const mine = bodySet.has(k);
+      if (!mine && this.getBlock(c[0], c[1], c[2]) === WATER) continue;  // foreign water
+      target.add(k);
+      taken++;
+      if (!mine) fills.push(c);
+    }
+    if (!fills.length) return;                  // already at rest
+    const drains = body.filter((c) => !target.has(k3(c[0], c[1], c[2])));
+    fills.sort((a, b) => a[1] - b[1]);          // pour in bottom-up…
+    drains.sort((a, b) => b[1] - a[1]);         // …taking from the old surface first
+    this._settles.push({ fills, drains, i: 0, edits: [] });
+  }
+
+  // Animate the re-level a few blocks per frame — one drain paired with one
+  // fill, so volume is conserved at every visible moment — then persist and
+  // relay the whole move as a single batch.
+  _updateSettles() {
+    if (!this._settles.length) {
+      if (!this._settlePending.length || this._floods.length) return;
+      const [x, y, z] = this._settlePending.shift();
+      this._startSettle(x, y, z);
+      if (!this._settles.length) return;
+    }
+    const s = this._settles[0];
+    let budget = 16;
+    while (budget-- > 0 && s.i < s.fills.length) {
+      const d = s.drains[s.i], f = s.fills[s.i];
+      s.i++;
+      // The world may have changed since this was planned — verify each move.
+      if (this.getBlock(d[0], d[1], d[2]) !== WATER
+          || this.getBlock(f[0], f[1], f[2]) !== AIR) continue;
+      this.setBlock(d[0], d[1], d[2], AIR, false);
+      this.setBlock(f[0], f[1], f[2], WATER, false);
+      s.edits.push({ x: d[0], y: d[1], z: d[2], block: AIR },
+                   { x: f[0], y: f[1], z: f[2], block: WATER });
+    }
+    if (s.i < s.fills.length) return;
+    this._settles.shift();
+    if (!s.edits.length) return;
+    if (this.net && this.net.connected) this.net.sendEdits(s.edits);
+    else {
+      fetch(`${this.base}/edits`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edits: s.edits }),
+      }).catch(() => {});
+    }
   }
 
   // Drain active flood-fills a slice per frame. Breaching a big dam used to
@@ -326,6 +505,7 @@ export class World {
     if (ws) ws.uniforms.uTime.value = this._time;
     this._updateEffects(dt);
     this._updateFloods();
+    this._updateSettles();
     this._updateGlow(daylight, dt);
     const ccx = floorDiv(px, DIM.CX), ccz = floorDiv(pz, DIM.CZ);
 
@@ -391,6 +571,8 @@ export class World {
     this._retryAt.clear();
     this.prox.clear();
     this._floods = [];
+    this._settles = [];
+    this._settlePending = [];
     for (const f of this.fuses) this.scene.remove(f.mesh);
     for (const p of this.particles) {
       this.scene.remove(p.points);
@@ -543,11 +725,11 @@ export class World {
         }).catch(() => {});
       }
     }
-    // An underwater crater fills back in: reflood any cleared cell below sea
-    // level that touches water. The first one that connects floods the rest, so
-    // the repeated calls on already-filled cells are cheap no-ops.
+    // Water reacts to the crater: sea-connected water refloods it; a player's
+    // pond next to the blast drains into the hole (settle). Repeated calls on
+    // already-covered cells are cheap no-ops.
     for (const cell of removed) {
-      if (cell.y <= DIM.water) this._floodWater(cell.x, cell.y, cell.z);
+      this._waterDisturb(cell.x, cell.y, cell.z);
     }
   }
 

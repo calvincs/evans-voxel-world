@@ -38,7 +38,7 @@ FAIL=0
 echo "=== tools/test_creature_ai.py (pure Python, server AI) ==="
 .venv/bin/python tools/test_creature_ai.py || FAIL=1
 
-for t in test_mines test_mine_ownership test_village; do
+for t in test_mines test_mine_ownership test_water test_village; do
   echo "=== tools/$t.py ==="
   .venv/bin/python "tools/$t.py" || FAIL=1
 done
