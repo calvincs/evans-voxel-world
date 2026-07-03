@@ -3,13 +3,15 @@
 //
 //   🎃 Pumpkins — a strike lights the carved face (jack-o'-lantern, a real
 //      light source at night); another strike snuffs it.
-//   💣 Proximity mines — strikes cycle OFF → watch-OTHERS → watch-EVERYONE →
-//      OFF. Arming takes 5s (time to walk away); when something wanders close
-//      a live mine blows instantly: half a TNT's crater, but the full TNT
-//      lethal radius for creatures and players (sensing and blast damage are
-//      pure distance — walls don't shield). A mine never fires on the player
-//      who armed it. Explosions chain both ways: a blast sets off nearby
-//      mines and TNT alike.
+//   💣 Proximity mines — strikes cycle OFF → MONSTERS (green eye: only
+//      hostile creatures — wolves, spiders, squid — set it off; safe for
+//      people and pets) → watch-OTHERS (yellow) → watch-EVERYONE (red) → OFF,
+//      in escalating danger. Arming takes 5s (time to walk away); when
+//      something it watches wanders close, a live mine blows instantly: half
+//      a TNT's crater, but the full TNT lethal radius (sensing and blast
+//      damage are pure distance — walls don't shield). A mine never fires on
+//      the player who armed it (except EVERYONE mode). Explosions chain both
+//      ways: a blast sets off nearby mines and TNT alike.
 //   ⬆➡ Elevators — strikes set the travel distance (1..10, wrapping back to
 //      1); the number is painted on the block. Stand on one and it glides out;
 //      step off and it comes home and lands.
@@ -26,7 +28,7 @@
 import * as THREE from 'three';
 import * as audio from './audio.js';
 import {
-  AIR, PUMPKIN, PUMPKIN_LIT, PROX_OFF, PROX_OTHERS, PROX_ALL,
+  AIR, PUMPKIN, PUMPKIN_LIT, PROX_OFF, PROX_OTHERS, PROX_ALL, PROX_HOSTILE,
   ELEV_UP, ELEV_SIDE, ELEV_DOWN, ELEV_SIDE_REV, ELEV_SIDE_R, ELEV_SIDE_L,
   ELEV_MAX, elevBase, elevCount, isProx,
   isSolid, BLOCKS, ATLAS_COLS, TILE_PX,
@@ -125,12 +127,16 @@ export class Gear {
     const k = key(x, y, z);
     audio.playIgnite(pos);
     if (block === PROX_OFF) {
-      this.world.setBlock(x, y, z, PROX_OTHERS);
+      this.world.setBlock(x, y, z, PROX_HOSTILE);
       this._armMine(k, x, y, z);
+      this.msg(`💣 Monster trap — only wolves, spiders and squid set it off. Safe for people and pets! Live in ${MINE_ARM_DELAY} seconds.`);
+    } else if (block === PROX_HOSTILE) {
+      this.world.setBlock(x, y, z, PROX_OTHERS);
+      this._armMine(k, x, y, z);                       // arming restarts
       this.msg(`💣 Mine ON — it will never blow up on YOU. Live in ${MINE_ARM_DELAY} seconds!`);
     } else if (block === PROX_OTHERS) {
       this.world.setBlock(x, y, z, PROX_ALL);
-      this._armMine(k, x, y, z);                       // arming restarts
+      this._armMine(k, x, y, z);
       this.msg(`💣 DANGER mine — it can blow up on YOU too! Live in ${MINE_ARM_DELAY} seconds — run!`);
     } else {
       this._dropMine(k);
@@ -163,8 +169,8 @@ export class Gear {
   _updateMines(dt) {
     for (const [k, m] of this.mines) {
       const b = this.world.getBlock(m.x, m.y, m.z);
-      if (b !== PROX_OTHERS && b !== PROX_ALL) {       // broken or switched off
-        this._dropMine(k);
+      if (b !== PROX_OTHERS && b !== PROX_ALL && b !== PROX_HOSTILE) {
+        this._dropMine(k);                             // broken or switched off
         continue;
       }
       m.t -= dt;

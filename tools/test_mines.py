@@ -161,7 +161,8 @@ def main():
       S(M1.x + 1, PY + 1, M1.z + 1, 3);
       S(M1.x + 1, PY + 2, M1.z, 3);
       T.flush();                                     // the server needs the arena
-      G.gear.strike(M1.x, PY + 1, M1.z, 25);         // arm for OTHERS
+      G.gear.strike(M1.x, PY + 1, M1.z, 25);         // -> MONSTERS (green)
+      G.gear.strike(M1.x, PY + 1, M1.z, 28);         // -> OTHERS (yellow)
       G.mobs.hatchEgg('pig', M1.x + 1, PY + 1, M1.z);   // trigger, penned 1 away
       return 'armed + trigger';
     })()""")
@@ -216,7 +217,8 @@ def main():
       S(M3.x + 1, PY + 1, M3.z, 18);                 // TNT next door
       S(M3.x + 4, PY + 1, M3.z, 3);                  // witness: only TNT reaches it
       T.flush();
-      G.gear.strike(M3.x, PY + 1, M3.z, 25);
+      G.gear.strike(M3.x, PY + 1, M3.z, 25);         // -> MONSTERS
+      G.gear.strike(M3.x, PY + 1, M3.z, 28);         // -> OTHERS (pig can trip)
       return 'armed';
     })()""")
     time.sleep(6)                                    # arming period passes
@@ -235,7 +237,8 @@ def main():
       slab(m.x - 2, m.z - 2, 5, 5);
       S(m.x, PY + 1, m.z, 25);
       T.flush();
-      G.gear.strike(m.x, PY + 1, m.z, 25);
+      G.gear.strike(m.x, PY + 1, m.z, 25);           // -> MONSTERS
+      G.gear.strike(m.x, PY + 1, m.z, 28);           // -> OTHERS (pig can trip)
       localStorage.setItem('mineT4', JSON.stringify(m));
       return 'armed';
     })()""")
@@ -254,6 +257,37 @@ def main():
     time.sleep(2.5)                                  # far less than the 5s re-arm
     check("live IMMEDIATELY (no re-arming window)",
           ev("T.W.getBlock(M4.x, M4.PY + 1, M4.z) === 0"))
+
+    # --- T5: monster trap — hostile creatures only ------------------------------
+    print("--- T5: monster trap (green eye) ---")
+    ev(r"""(() => {
+      const { G, P, PY, S, slab } = T;
+      window.M5 = { x: P.x + 26, z: P.z - 8 };
+      slab(M5.x - 2, M5.z - 2, 5, 5);
+      S(M5.x, PY + 1, M5.z, 25);
+      T.flush();
+      G.gear.strike(M5.x, PY + 1, M5.z, 25);         // ONE strike = monster trap
+      return 'armed';
+    })()""")
+    time.sleep(6)                                    # live
+    check("one strike arms the monster trap (green, 28)",
+          ev("T.W.getBlock(M5.x, T.PY + 1, M5.z) === 28"))
+    ev("T.G.mobs.hatchEgg('pig', M5.x + 1, T.PY + 1, M5.z); 'pig'")
+    time.sleep(2.5)
+    check("a pig walks the sensor safely",
+          ev("T.W.getBlock(M5.x, T.PY + 1, M5.z) === 28"))
+    # The owner standing on it is also safe (players never trigger this mode).
+    ev("T.G.player.pos.set(M5.x + 1.2, T.PY + 1, M5.z + 0.5);"
+       "T.G.player.vel.set(0, 0, 0); 'standing on it'")
+    time.sleep(2.5)
+    check("players are safe too",
+          ev("T.W.getBlock(M5.x, T.PY + 1, M5.z) === 28"))
+    ev("T.G.player.pos.set(M5.x + 1.5, T.PY + 1, M5.z + 12.5);"
+       "T.G.player.vel.set(0, 0, 0); 'stepped clear'")
+    ev("T.G.mobs.hatchEgg('wolf', M5.x + 1, T.PY + 1, M5.z); 'wolf'")
+    time.sleep(2.5)
+    check("...but a wolf sets it off",
+          ev("T.W.getBlock(M5.x, T.PY + 1, M5.z) === 0"))
 
     set_wildlife(True)
     print("RESULT:", "ALL PASS" if ok else "SOME FAILED")

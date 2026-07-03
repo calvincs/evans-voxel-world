@@ -100,7 +100,8 @@ def main():
     }
   S(M.x, PY + 1, M.z, 25);
   G.net.sendEdits(edits);
-  G.gear.strike(M.x, PY + 1, M.z, 25);            // OTHERS — owner = me
+  G.gear.strike(M.x, PY + 1, M.z, 25);            // -> MONSTERS
+  G.gear.strike(M.x, PY + 1, M.z, 28);            // -> OTHERS — owner = me
   localStorage.setItem('mineTest', JSON.stringify(M));
   return 'armed at ' + JSON.stringify(M);
 })()"""))
@@ -137,7 +138,8 @@ def main():
     ev(r"""(() => {
       const G = window.game;
       G.world.setBlock(M.x2, M.PY + 1, M.z2, 25, false);
-      G.gear.strike(M.x2, M.PY + 1, M.z2, 25);      // -> OTHERS
+      G.gear.strike(M.x2, M.PY + 1, M.z2, 25);      // -> MONSTERS
+      G.gear.strike(M.x2, M.PY + 1, M.z2, 28);      // -> OTHERS
       G.gear.strike(M.x2, M.PY + 1, M.z2, 26);      // -> EVERYONE
       return 'armed #2 for everyone';
     })()""")

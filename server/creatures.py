@@ -84,6 +84,8 @@ MINE_RANGE = 2.5
 MINE_ARM_DELAY = 5.0         # matches the client's arming blink (gear.js)
 PROX_OTHERS = 26             # armed: everyone but the owner
 PROX_ALL = 27                # armed: everyone, owner included
+PROX_HOSTILE = 28            # armed: hostile creatures ONLY (wolf/spider/squid)
+                             # — the "monster trap"; people and pets are safe
 
 
 def daylight_now(now: float | None = None) -> float:
@@ -689,17 +691,20 @@ class WorldSim:
             except ValueError:
                 continue
             b = self.view.get_block(x, y, z)
-            if b != PROX_OTHERS and b != PROX_ALL:
+            if b not in (PROX_OTHERS, PROX_ALL, PROX_HOSTILE):
                 self.mine_live.pop(key, None)         # defused or blown away
                 continue
+            hostile_only = b == PROX_HOSTILE          # the monster trap
             cx, cy, cz = x + 0.5, y + 0.5, z + 0.5
             tripped = False
-            for c in self.creatures.values():         # creatures always count
+            for c in self.creatures.values():
+                if hostile_only and not c.t.get("hostile"):
+                    continue                          # pets/villagers walk free
                 if math.hypot(c.x - cx, c.y + 0.4 - cy, c.z - cz) < MINE_RANGE:
                     tripped = True
                     break
-            if not tripped:
-                for p in players:
+            if not tripped and not hostile_only:      # monster traps never
+                for p in players:                     # fire on ANY player
                     if b == PROX_OTHERS and p.get("name") == owner:
                         continue                      # never fires on its owner
                     if math.hypot(p["x"] - cx, p["y"] + 0.9 - cy,

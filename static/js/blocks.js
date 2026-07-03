@@ -17,7 +17,10 @@ export const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5,
 // Contraption blocks (see gear.js). A Firestone strike changes their state,
 // which is just a block swap — so it persists and syncs like any other edit.
 export const PUMPKIN_LIT = 24;                                // jack-o'-lantern
-export const PROX_OFF = 25, PROX_OTHERS = 26, PROX_ALL = 27;  // proximity mine modes
+// Proximity mine modes, cycled by Firestone strikes in escalating danger:
+// OFF -> HOSTILE (monsters only — safe for people and pets) -> OTHERS
+// (everyone but the owner) -> ALL (everyone, owner included) -> OFF.
+export const PROX_OFF = 25, PROX_OTHERS = 26, PROX_ALL = 27, PROX_HOSTILE = 28;
 // Elevators: ten consecutive ids per direction; the id itself encodes the set
 // travel distance (1..10), which the block texture displays. The 11th strike
 // switches to the next direction and restarts at 1. Vertical: up <-> down.
@@ -34,7 +37,8 @@ export const elevBase = (b) => {
   return 0;
 };
 export const elevCount = (b) => { const base = elevBase(b); return base ? b - base + 1 : 0; };
-export const isProx = (b) => b === PROX_OFF || b === PROX_OTHERS || b === PROX_ALL;
+export const isProx = (b) => b === PROX_OFF || b === PROX_OTHERS
+  || b === PROX_ALL || b === PROX_HOSTILE;
 
 // Tools live in the hotbar but are never placed as world blocks. Firestone
 // strikes blocks: lights TNT and pumpkins, arms mines, sets elevators.
@@ -72,6 +76,7 @@ const TILE = {
   tnt_side: 20, tnt_top: 21, flint: 22, firestone: 23, glowstone: 24,
   mossy: 25, marble: 26, rainbow: 27,
   pumpkin_lit: 28, prox_off: 29, prox_others: 30, prox_all: 31,
+  prox_hostile: 92,     // green eye (added after the elevator tile bank)
 };
 // Elevator counter tiles: 32..41 up, 42..51 side-forward, 52..61 down,
 // 62..71 side-back, 72..81 side-right, 82..91 side-left.
@@ -96,6 +101,7 @@ const BLOCK_COLOR = {
   [PUMPKIN]: 0xe08a2a, [GOLD]: 0xf1c92e, [DIAMOND]: 0x56d6d6, [WOOL_RED]: 0xc63f3f,
   [WOOL_BLUE]: 0x3f59c6, [TNT]: 0xc0392b, [FLINT]: 0x3b3f47, [GLOWSTONE]: 0xffcb52,
   [PUMPKIN_LIT]: 0xffb63e, [PROX_OFF]: 0x6f7683, [PROX_OTHERS]: 0xd7b23e, [PROX_ALL]: 0xd0503e,
+  [PROX_HOSTILE]: 0x57d06a,
 };
 for (let i = 0; i < ELEV_MAX; i++) {
   BLOCK_COLOR[ELEV_UP + i] = 0x7f93a8;
@@ -133,6 +139,7 @@ export const BLOCKS = {
   [RAINBOW]:  { name: 'Rainbow',   top: TILE.rainbow,   side: TILE.rainbow,  bottom: TILE.rainbow },
   [PUMPKIN_LIT]: { name: "Jack-o'-Lantern", top: TILE.pumpkin_top, side: TILE.pumpkin_lit, bottom: TILE.pumpkin_top },
   [PROX_OFF]:    { name: 'Proximity Mine (off)',      top: TILE.prox_off,    side: TILE.prox_off,    bottom: TILE.prox_off },
+  [PROX_HOSTILE]: { name: 'Proximity Mine (monsters)', top: TILE.prox_hostile, side: TILE.prox_hostile, bottom: TILE.prox_hostile },
   [PROX_OTHERS]: { name: 'Proximity Mine (others)',   top: TILE.prox_others, side: TILE.prox_others, bottom: TILE.prox_others },
   [PROX_ALL]:    { name: 'Proximity Mine (EVERYONE)', top: TILE.prox_all,    side: TILE.prox_all,    bottom: TILE.prox_all },
   [FIRESTONE]:{ name: 'Firestone (magic striker)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
@@ -392,6 +399,7 @@ const TILE_PAINTERS = {
     pumpkinFace(c, '#ffe27a');                      // the carved face glows
   },
   prox_off: (c) => { proxBody(c); c.fillStyle = '#20242a'; c.fillRect(5, 7, 6, 2); },  // eye shut
+  prox_hostile: (c) => { proxBody(c); proxEye(c, '#57d06a'); },  // green: monsters only
   prox_others: (c) => { proxBody(c); proxEye(c, '#ffd34d'); },   // yellow: watches others
   prox_all: (c) => {
     proxBody(c); proxEye(c, '#ff5340');             // red: watches EVERYONE

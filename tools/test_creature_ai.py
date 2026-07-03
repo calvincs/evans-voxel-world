@@ -298,8 +298,24 @@ def scenario_mines():
           sim.mines_tick(mines, [owner], now) == [(5, PY + 1, 2)])
     sim.creatures.clear()
 
+    # Monster trap (PROX_HOSTILE): only hostile creatures set it off.
+    sim.view.set(5, PY + 1, 2, 28)
+    sim.mine_live.pop(key, None)
+    pig2 = Creature("w10", "pig", 4.5, PY + 1, 2.5)
+    sim.creatures["w10"] = pig2
+    check("monster trap ignores a pig on the sensor",
+          sim.mines_tick(mines, [], now) == [])
+    check("monster trap ignores players (even strangers)",
+          sim.mines_tick(mines, [other], now) == [])
+    wolf = Creature("w11", "wolf", 5.5, PY + 1, 3.5)   # 1 block away
+    sim.creatures["w11"] = wolf
+    check("monster trap fires on a wolf",
+          sim.mines_tick(mines, [other], now) == [(5, PY + 1, 2)])
+    sim.creatures.clear()
+
     # Defused (block changed) -> silently dropped.
     sim.view.set(5, PY + 1, 2, 25)
+    sim.mine_live.pop(key, None)
     check("defused mine never trips",
           sim.mines_tick(mines, [other], now) == [] and key not in sim.mine_live)
 

@@ -4,6 +4,26 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-02 — The monster trap (new mine mode)
+
+**Why:** the mine modes could hurt people and friendly animals — there was no
+way to defend a base against the night's wolves and spiders without also
+endangering pigs, villagers, or a sibling.
+
+**What changed:**
+- New **🟢 monster trap** mode (green eye, block 28): only hostile creatures —
+  wolves, spiders, squid, the ones that can take your health — set it off.
+  Players (owner or not) and friendly creatures walk over it safely.
+- Strikes now cycle in **escalating danger**: off → monster trap → watch
+  others (yellow) → watch EVERYONE (red) → off. A kid's first strike gives
+  the safest, most useful defensive mine.
+- Sensing rule enforced server-side like the other modes (live forever once
+  armed, survives rejoins). Chain reactions unchanged — any mode still
+  detonates when caught in a blast.
+- Tests: 3 new pure-Python scenarios (pig ignored, strangers ignored, wolf
+  fires it) and a browser T5 (pig walks the sensor, owner stands on it, wolf
+  blows it), plus strike-count updates for the new cycle. Full suite green.
+
 ## 2026-07-02 — Mines stay live forever (server-watched)
 
 **Why:** mine sensors lived in whichever browser was nearby. Leave the world

@@ -477,11 +477,12 @@ class WorldStore:
     def key(x: int, y: int, z: int) -> str:
         return f"{x},{y},{z}"
 
-    # Armed proximity-mine block ids (must match static/js/blocks.js). The
-    # server keeps a per-world {"x,y,z": ownerName} map so a mine can always
-    # recognise — and never fire on — the player who armed it, no matter which
-    # client ends up running its sensor.
-    PROX_ARMED = (26, 27)
+    # Armed proximity-mine block ids (must match static/js/blocks.js):
+    # 26 = OTHERS, 27 = EVERYONE, 28 = HOSTILE creatures only. The server
+    # keeps a per-world {"x,y,z": ownerName} map — it's both how a mine
+    # recognises (and spares) its owner and how the sim knows which mines to
+    # watch (server/creatures.py mines_tick).
+    PROX_ARMED = (26, 27, 28)
 
     def _track_mine(self, w, x, y, z, block, owner):
         k = self.key(x, y, z)
