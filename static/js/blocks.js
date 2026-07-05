@@ -40,6 +40,24 @@ export const elevCount = (b) => { const base = elevBase(b); return base ? b - ba
 export const isProx = (b) => b === PROX_OFF || b === PROX_OTHERS
   || b === PROX_ALL || b === PROX_HOSTILE;
 
+// Doors: two orientations × open/closed, all ordinary block ids so state
+// persists and syncs like any edit. A door fills TWO cells (bottom + top) —
+// placement, toggling and breaking always handle the pair (world.js). X/Z is
+// the axis the panel SPANS: DOOR_X blocks north–south walking, DOOR_Z blocks
+// east–west. Open variants swing the panel against the cell edge and are
+// walk-through (and pass-through for creatures — see server/creatures.py).
+export const DOOR_X_CLOSED = 90, DOOR_Z_CLOSED = 91,
+             DOOR_X_OPEN = 92, DOOR_Z_OPEN = 93;
+export const DOOR = DOOR_X_CLOSED;            // the inventory item
+export const isDoor = (b) => b >= DOOR_X_CLOSED && b <= DOOR_Z_OPEN;
+export const isDoorOpen = (b) => b === DOOR_X_OPEN || b === DOOR_Z_OPEN;
+// closed <-> open, same orientation
+export const doorToggle = (b) => isDoorOpen(b) ? b - 2 : b + 2;
+// Which closed door faces the placer: looking mostly along ±x needs a panel
+// spanning z (blocks x passage), and vice versa.
+export const doorForYaw = (yaw) =>
+  Math.abs(Math.sin(yaw)) > Math.abs(Math.cos(yaw)) ? DOOR_Z_CLOSED : DOOR_X_CLOSED;
+
 // Tools live in the hotbar but are never placed as world blocks. Firestone
 // strikes blocks: lights TNT and pumpkins, arms mines, sets elevators.
 export const FIRESTONE = 100;
@@ -77,6 +95,7 @@ const TILE = {
   mossy: 25, marble: 26, rainbow: 27,
   pumpkin_lit: 28, prox_off: 29, prox_others: 30, prox_all: 31,
   prox_hostile: 92,     // green eye (added after the elevator tile bank)
+  door_top: 93, door_bottom: 94,
 };
 // Elevator counter tiles: 32..41 up, 42..51 side-forward, 52..61 down,
 // 62..71 side-back, 72..81 side-right, 82..91 side-left.
@@ -102,6 +121,8 @@ const BLOCK_COLOR = {
   [WOOL_BLUE]: 0x3f59c6, [TNT]: 0xc0392b, [FLINT]: 0x3b3f47, [GLOWSTONE]: 0xffcb52,
   [PUMPKIN_LIT]: 0xffb63e, [PROX_OFF]: 0x6f7683, [PROX_OTHERS]: 0xd7b23e, [PROX_ALL]: 0xd0503e,
   [PROX_HOSTILE]: 0x57d06a,
+  [DOOR_X_CLOSED]: 0x9a7440, [DOOR_Z_CLOSED]: 0x9a7440,
+  [DOOR_X_OPEN]: 0x9a7440, [DOOR_Z_OPEN]: 0x9a7440,
 };
 for (let i = 0; i < ELEV_MAX; i++) {
   BLOCK_COLOR[ELEV_UP + i] = 0x7f93a8;
@@ -143,6 +164,12 @@ export const BLOCKS = {
   [PROX_OTHERS]: { name: 'Proximity Mine (others)',   top: TILE.prox_others, side: TILE.prox_others, bottom: TILE.prox_others },
   [PROX_ALL]:    { name: 'Proximity Mine (EVERYONE)', top: TILE.prox_all,    side: TILE.prox_all,    bottom: TILE.prox_all },
   [FIRESTONE]:{ name: 'Firestone (magic striker)', top: TILE.firestone, side: TILE.firestone, bottom: TILE.firestone },
+  // Doors: `top`/`bottom` name the two panel-half tiles (the mesher picks by
+  // which half of the pair a cell is); `side` is the icon fallback.
+  [DOOR_X_CLOSED]: { name: 'Door',        top: TILE.door_top, side: TILE.door_bottom, bottom: TILE.door_bottom },
+  [DOOR_Z_CLOSED]: { name: 'Door',        top: TILE.door_top, side: TILE.door_bottom, bottom: TILE.door_bottom },
+  [DOOR_X_OPEN]:   { name: 'Door (open)', top: TILE.door_top, side: TILE.door_bottom, bottom: TILE.door_bottom },
+  [DOOR_Z_OPEN]:   { name: 'Door (open)', top: TILE.door_top, side: TILE.door_bottom, bottom: TILE.door_bottom },
 };
 // Spawn eggs have painted icons (drawEggIcon), not atlas tiles — the entry
 // carries just the name. Water creatures note their one rule in the tooltip.
@@ -162,11 +189,15 @@ for (let i = 1; i <= ELEV_MAX; i++) {
 }
 
 // Transparent for face-culling purposes (a face is drawn against these).
-const TRANSPARENT = new Set([AIR, WATER, GLASS, LEAVES]);
+// Doors are thin panels that never cover a full face, so neighbours always
+// draw against them.
+const TRANSPARENT = new Set([AIR, WATER, GLASS, LEAVES,
+  DOOR_X_CLOSED, DOOR_Z_CLOSED, DOOR_X_OPEN, DOOR_Z_OPEN]);
 export const isTransparent = (b) => TRANSPARENT.has(b);
 
-// Solid for physics / collision (everything you can stand on).
-export const isSolid = (b) => b !== AIR && b !== WATER;
+// Solid for physics / collision (everything you can stand on). An OPEN door
+// is a doorway: fully walk-through. (server/creatures.py mirrors this rule.)
+export const isSolid = (b) => b !== AIR && b !== WATER && !isDoorOpen(b);
 
 // The hotbar: 8 slots, keys 1..8 (and scroll). Swap any block in via the
 // inventory (E). This array is mutated when you pick a block from there.
@@ -183,7 +214,7 @@ export const ALL_BLOCKS = [
   GRASS, DIRT, STONE, COBBLE, MOSSY, MARBLE, PLANKS, WOOD, LEAVES, SAND,
   SNOW, BRICK, GLASS, WATER, GLOWSTONE, GOLD, DIAMOND, PUMPKIN,
   WOOL_RED, WOOL_BLUE, RAINBOW, TNT, PROX_OFF, ELEV_UP, ELEV_SIDE,
-  FLINT, FIRESTONE,
+  DOOR, FLINT, FIRESTONE,
   ...Object.keys(SPAWN_EGGS).map(Number),   // creature eggs, one per species
 ];
 
@@ -239,6 +270,15 @@ function proxEye(c, col) {
   c.fillRect(6, 6, 4, 4);
   c.fillStyle = '#1c1c22';
   c.fillRect(7, 7, 2, 2);                           // pupil
+}
+// Shared base for the two door tiles: vertical plank boards in a dark frame.
+function doorBoards(c) {
+  speckle(c, '#9a7440', 77, 18);
+  c.fillStyle = shade('#6a4a22', 0);                // board seams
+  for (const x of [5, 10]) c.fillRect(x, 1, 1, 14);
+  c.fillStyle = '#4f3a1e';                          // frame
+  c.fillRect(0, 0, 16, 1); c.fillRect(0, 15, 16, 1);
+  c.fillRect(0, 0, 1, 16); c.fillRect(15, 0, 1, 16);
 }
 
 // Tiny 3x5 digit font (drawn at 2x) for the elevator distance counters.
@@ -477,6 +517,23 @@ const TILE_PAINTERS = {
     c.fillStyle = '#2b2f36'; c.fillRect(9, 3, 4, 4);        // flint
     c.fillStyle = '#ffd34d';                               // sparks
     c.fillRect(12, 2, 1, 1); c.fillRect(13, 4, 1, 1); c.fillRect(11, 1, 1, 1);
+  },
+  door_bottom: (c) => {
+    doorBoards(c);
+    c.fillStyle = '#ffd34d';                        // brass handle
+    c.fillRect(12, 6, 2, 2);
+    c.fillStyle = '#8a6a1e';
+    c.fillRect(12, 8, 2, 1);                        // handle shadow
+  },
+  door_top: (c) => {
+    doorBoards(c);
+    c.fillStyle = '#bfe3f0';                        // 2×2 window panes
+    c.fillRect(4, 5, 3, 3); c.fillRect(9, 5, 3, 3);
+    c.fillRect(4, 10, 3, 3); c.fillRect(9, 10, 3, 3);
+    c.fillStyle = '#4f3a1e';                        // muntins
+    c.fillRect(7, 5, 2, 8); c.fillRect(4, 8, 8, 2);
+    c.fillStyle = 'rgba(255,255,255,0.7)';          // glints
+    c.fillRect(5, 6, 1, 1); c.fillRect(10, 11, 1, 1);
   },
 };
 for (let i = 1; i <= ELEV_MAX; i++) {

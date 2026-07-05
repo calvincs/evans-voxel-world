@@ -7,6 +7,7 @@ lived in the client:
 
   A. a wolf drops into a pit to reach its prey
   B. a wolf paths through an offset doorway in a wall
+  B2. a CLOSED door blocks a wolf; an OPEN one is a doorway
   C. a squid dives down a water well to a deep swimmer
   D. a hurt pig bolts, but won't lemming into a pit
   E. day/night temperament (avoid by day, snap when crowded, anger, night reach)
@@ -145,6 +146,30 @@ def scenario_wall():
     sim.creatures["w1"] = w
     sim_seconds(sim, 15, [pl], 0.0)
     check("wolf paths through the doorway", horiz(w, pl) < 1.6,
+          f"h={horiz(w, pl):.2f} pos=({w.x:.1f},{w.z:.1f})")
+
+
+def scenario_doors():
+    random.seed(9)
+    sim = make_sim()
+    platform(sim.view, 0, 0, 19, 5, PY)
+    wx = 6
+    for z in range(0, 5):                      # wall across, 3 tall
+        for dy in range(1, 4):
+            sim.view.set(wx, PY + dy, z, STONE)
+    # The only way through is a 2-tall doorway holding a CLOSED door.
+    sim.view.set(wx, PY + 1, 2, C.DOOR_Z_CLOSED)
+    sim.view.set(wx, PY + 2, 2, C.DOOR_Z_CLOSED)
+    pl = {"pid": 1, "x": 9.5, "y": PY + 1, "z": 2.5}
+    w = Creature("w1", "wolf", 3.5, PY + 1, 2.5)
+    sim.creatures["w1"] = w
+    sim_seconds(sim, 12, [pl], 0.0)            # night: full aggression
+    check("a CLOSED door keeps the wolf out", horiz(w, pl) > 2.5,
+          f"h={horiz(w, pl):.2f}")
+    sim.view.set(wx, PY + 1, 2, C.DOOR_Z_OPEN)   # swing it open
+    sim.view.set(wx, PY + 2, 2, C.DOOR_Z_OPEN)
+    sim_seconds(sim, 12, [pl], 0.0)
+    check("an OPEN door lets it walk through", horiz(w, pl) < 1.6,
           f"h={horiz(w, pl):.2f} pos=({w.x:.1f},{w.z:.1f})")
 
 
@@ -321,9 +346,9 @@ def scenario_mines():
 
 
 def main():
-    for fn in (scenario_pit, scenario_wall, scenario_squid, scenario_flee,
-               scenario_temperament, scenario_eggs, scenario_bites,
-               scenario_mines):
+    for fn in (scenario_pit, scenario_wall, scenario_doors, scenario_squid,
+               scenario_flee, scenario_temperament, scenario_eggs,
+               scenario_bites, scenario_mines):
         print(f"--- {fn.__name__} ---")
         fn()
     print(f"\nall {PASS} checks passed")

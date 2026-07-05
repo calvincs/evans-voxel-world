@@ -318,6 +318,38 @@ export function playHurt() {
   o.start(t0); o.stop(t0 + 0.18);
 }
 
+// A door swings: rising wooden creak to open, a firm thunk + latch to close.
+export function playDoor(open, pos) {
+  if (!ctx || !soundOn) return;
+  const d = dest(pos, 24); if (!d) return;
+  const t0 = ctx.currentTime;
+  if (open) {
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(150, t0);
+    o.frequency.linearRampToValueAtTime(320, t0 + 0.18);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 850;
+    const g = env(t0, 0.16 * d.gain, 0.22, 0.03);
+    o.connect(lp); lp.connect(g); g.connect(d.node);
+    o.start(t0); o.stop(t0 + 0.26);
+  } else {
+    const o = ctx.createOscillator();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(220, t0);
+    o.frequency.exponentialRampToValueAtTime(85, t0 + 0.1);
+    const g = env(t0, 0.4 * d.gain, 0.14);
+    o.connect(g); g.connect(d.node);
+    o.start(t0); o.stop(t0 + 0.16);
+    const src = noiseSource();                 // the latch click
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.1;
+    const ng = env(t0 + 0.04, 0.13 * d.gain, 0.05);
+    src.connect(bp); bp.connect(ng); ng.connect(d.node);
+    src.start(t0 + 0.04); src.stop(t0 + 0.12);
+  }
+}
+
 // Plunging into water.
 export function playSplash(pos) {
   if (!ctx || !soundOn) return;

@@ -3,7 +3,10 @@
 // place.
 
 import * as THREE from 'three';
-import { isSolid, AIR, WATER, HOTBAR, TNT, FIRESTONE, isTool, blockColor, isSpawnEgg, SPAWN_EGGS } from '../blocks.js';
+import {
+  isSolid, AIR, WATER, HOTBAR, TNT, FIRESTONE, isTool, blockColor,
+  isSpawnEgg, SPAWN_EGGS, isDoor, isDoorOpen, DOOR, DOOR_X_OPEN,
+} from '../blocks.js';
 import * as audio from '../audio.js';
 import { Character } from './character.js';
 
@@ -68,6 +71,7 @@ export class Player {
     this.onDeath = null;         // callback() when hp hits 0
     this.onPause = null;         // callback() when touch controls ask to pause
     this.onStrike = null;        // callback(x,y,z,block) for Firestone strikes; true = handled
+    this.onMsg = null;           // callback(text) for gameplay tips (toasts)
     this.lastDamage = null;      // what hit us last ('wolf', 'blast', …) for the death screen
     this.kb = new THREE.Vector3();  // knockback impulse, decays over time
     this.inWater = false;
@@ -402,7 +406,12 @@ export class Player {
     while (t <= REACH) {
       const b = this.world.getBlock(x, y, z);
       if (b !== AIR && b !== WATER) {
-        return { hit: { x, y, z }, prev: { x: px, y: py, z: pz } };
+        // An OPEN door is a doorway: only its swung panel is clickable. When
+        // the ray misses the thin panel it travels on through the opening,
+        // so you can aim past an open door without slamming it in your face.
+        if (!isDoorOpen(b) || this._hitsOpenPanel(origin, dir, x, y, z, b)) {
+          return { hit: { x, y, z }, prev: { x: px, y: py, z: pz } };
+        }
       }
       px = x; py = y; pz = z;
       if (tMaxX < tMaxY && tMaxX < tMaxZ) { x += stepX; t = tMaxX; tMaxX += tDeltaX; }
@@ -410,6 +419,27 @@ export class Player {
       else { z += stepZ; t = tMaxZ; tMaxZ += tDeltaZ; }
     }
     return null;
+  }
+
+  // Does the eye ray hit an open door's swung panel? (Slab test against the
+  // panel box — open panels rest against the west/north jamb, see chunk.js.)
+  _hitsOpenPanel(origin, dir, x, y, z, b) {
+    const thin = 0.12;
+    const min = { x, y, z };
+    const max = b === DOOR_X_OPEN
+      ? { x: x + thin, y: y + 1, z: z + 1 }
+      : { x: x + 1, y: y + 1, z: z + thin };
+    let t0 = 0, t1 = REACH;
+    for (const a of ['x', 'y', 'z']) {
+      const d = dir[a] || 1e-9;
+      let ta = (min[a] - origin[a]) / d;
+      let tb = (max[a] - origin[a]) / d;
+      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+      if (ta > t0) t0 = ta;
+      if (tb < t1) t1 = tb;
+      if (t0 > t1) return false;
+    }
+    return true;
   }
 
   _updateHighlight() {
@@ -456,6 +486,12 @@ export class Player {
     const r = this.raycast();
     if (!r) return;
     const broken = this.world.getBlock(r.hit.x, r.hit.y, r.hit.z);
+    if (isDoor(broken)) {
+      this.world.removeDoor(r.hit.x, r.hit.y, r.hit.z);  // both halves + bursts
+      audio.playBreak();
+      if (this.onBreakPlace) this.onBreakPlace('break');
+      return;
+    }
     this.world.setBlock(r.hit.x, r.hit.y, r.hit.z, AIR);
     this.world.spawnBreakBurst(r.hit.x, r.hit.y, r.hit.z, blockColor(broken));
     audio.playBreak();
@@ -466,14 +502,39 @@ export class Player {
     const r = this.raycast();
     if (!r) return;
 
+    // Doors swing open and shut with an ordinary click, whatever's in hand —
+    // no tool to learn. (Open doors are only hit when you click the panel.)
+    const target = this.world.getBlock(r.hit.x, r.hit.y, r.hit.z);
+    if (isDoor(target)) {
+      this.world.toggleDoor(r.hit.x, r.hit.y, r.hit.z);
+      if (this.onBreakPlace) this.onBreakPlace('place');
+      return;
+    }
+
     const held = HOTBAR[this.selected];
     if (held === FIRESTONE) {                  // strike the target block
-      const b = this.world.getBlock(r.hit.x, r.hit.y, r.hit.z);
+      const b = target;
       if (this.onStrike && this.onStrike(r.hit.x, r.hit.y, r.hit.z, b)) return;
       if (b === TNT) {
         this.world.igniteTNT(r.hit.x, r.hit.y, r.hit.z);
       } else {
         audio.playIgnite();                    // just a spark
+      }
+      return;
+    }
+    if (held === DOOR) {                       // doors fill TWO cells upward
+      const { x, y, z } = r.prev;
+      const overlapX = x + 1 > this.pos.x - HALF_W && x < this.pos.x + HALF_W;
+      const overlapZ = z + 1 > this.pos.z - HALF_W && z < this.pos.z + HALF_W;
+      const overlapY = y + 2 > this.pos.y && y < this.pos.y + HEIGHT;
+      if (overlapX && overlapY && overlapZ) return;   // would entomb the placer
+      if (this.world.placeDoor(x, y, z, this.yaw)) {
+        audio.playPlace();
+        if (this.onBreakPlace) this.onBreakPlace('place');
+        if (this.onMsg && !this._doorTip) {
+          this._doorTip = true;
+          this.onMsg('🚪 Door placed — click it to open and close it.');
+        }
       }
       return;
     }
@@ -487,6 +548,10 @@ export class Player {
     if (isTool(held)) return;                  // other tools don't place
 
     const { x, y, z } = r.prev;
+    // The cell must be free: rays pass through open doorways, so `prev` can
+    // land inside an open door's cell — never overwrite the door.
+    const pb = this.world.getBlock(x, y, z);
+    if (pb !== AIR && pb !== WATER) return;
     // Don't entomb yourself: skip if the new block intersects the player AABB.
     const overlapX = x + 1 > this.pos.x - HALF_W && x < this.pos.x + HALF_W;
     const overlapZ = z + 1 > this.pos.z - HALF_W && z < this.pos.z + HALF_W;

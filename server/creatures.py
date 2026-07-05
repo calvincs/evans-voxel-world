@@ -86,6 +86,10 @@ PROX_OTHERS = 26             # armed: everyone but the owner
 PROX_ALL = 27                # armed: everyone, owner included
 PROX_HOSTILE = 28            # armed: hostile creatures ONLY (wolf/spider/squid)
                              # — the "monster trap"; people and pets are safe
+DOOR_X_CLOSED = 90           # closed doors are solid — wolves can't work a
+DOOR_Z_CLOSED = 91           # door handle, so a shut door keeps hunters out
+DOOR_X_OPEN = 92             # open doors are doorways: creatures walk through
+DOOR_Z_OPEN = 93             # ids match blocks.js
 
 
 def daylight_now(now: float | None = None) -> float:
@@ -95,7 +99,7 @@ def daylight_now(now: float | None = None) -> float:
 
 
 def is_solid(b: int) -> bool:
-    return b != AIR and b != WATER
+    return b != AIR and b != WATER and b != DOOR_X_OPEN and b != DOOR_Z_OPEN
 
 
 class BlockView:

@@ -4,6 +4,31 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-05 — Doors! 🚪
+
+**Why:** houses need doors — a way in for you, and NOT for the wolves. Until
+now a base was either sealed shut or open to the night.
+
+**What changed:**
+- New **Door** in the inventory: place one and a proper two-block-tall door
+  stands up facing you (plank boards, brass handle, a little window up top).
+- **Click a door to swing it open or shut** — any held item works, both
+  halves move together, with a wooden creak / thunk. A first-time tip toast
+  explains it.
+- **Closed doors are solid and creatures can't open them** — the server's
+  creature AI treats a shut door as wall, so wolves and spiders stay outside
+  (they walk through open ones, so close up at night!).
+- Open doors are real doorways: the panel swings against the jamb, you walk
+  straight through, and your aim passes through the opening — only clicking
+  the swung panel closes it. Doors render as thin panels (a new
+  float-precision chunk sub-mesh on the same atlas material — no new shader).
+- Breaking either half removes the whole door; explosions never leave half a
+  door floating. Door state is ordinary block edits, so doors persist, sync
+  to friends, and rewind with snapshots.
+- Tests: 2 new pure-Python AI scenarios (closed blocks a wolf / open lets it
+  through) and a browser suite (placement, orientation, click-to-toggle,
+  walk-through, panel-only aiming, server persistence, pair-breaking).
+
 ## 2026-07-05 — Daytime stops paying for night lights (and mute means idle)
 
 **Why:** every pixel on screen computed all 8 glowstone point-lights all day

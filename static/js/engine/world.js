@@ -4,7 +4,10 @@
 import * as THREE from 'three';
 import { DIM, RENDER_DISTANCE } from './constants.js';
 import { Chunk } from './chunk.js';
-import { AIR, STONE, WATER, TNT, isGlow, isProx } from '../blocks.js';
+import {
+  AIR, STONE, WATER, TNT, isGlow, isProx,
+  isSolid, isDoor, isDoorOpen, doorToggle, doorForYaw, blockColor,
+} from '../blocks.js';
 import * as audio from '../audio.js';
 
 const key = (cx, cz) => `${cx},${cz}`;
@@ -203,6 +206,75 @@ export class World {
       if (block === AIR) this._waterDisturb(wx, wy, wz);
       else if (block === WATER) this._schedSettle(wx, wy, wz);
     }
+  }
+
+  // Persist a batch of already-applied local edits (relay in multiplayer,
+  // POST when offline) — the same pattern floods and settles use.
+  _persistEdits(edits) {
+    if (!edits.length) return;
+    if (this.net && this.net.connected) {
+      this.net.sendEdits(edits);
+    } else {
+      fetch(`${this.base}/edits`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ edits }),
+      }).catch(() => {});
+    }
+  }
+
+  // --- Doors -----------------------------------------------------------------
+  // A door is a PAIR of cells sharing one block id; these helpers keep the
+  // pair in lock-step. State changes are plain block swaps, so they persist,
+  // relay to friends, and rewind like any other edit.
+
+  // The matching half of the door at (x,y,z): prefer below (we're the top).
+  _doorPartnerY(x, y, z, b) {
+    if (this.getBlock(x, y - 1, z) === b) return y - 1;
+    if (this.getBlock(x, y + 1, z) === b) return y + 1;
+    return null;
+  }
+
+  // Place a two-cell door standing on solid ground, facing the placer.
+  placeDoor(x, y, z, yaw) {
+    if (y < 1 || y + 1 >= DIM.WY) return false;
+    if (this.getBlock(x, y, z) !== AIR || this.getBlock(x, y + 1, z) !== AIR) return false;
+    if (!isSolid(this.getBlock(x, y - 1, z))) return false;   // needs a floor
+    const id = doorForYaw(yaw);
+    const edits = [{ x, y, z, block: id }, { x, y: y + 1, z, block: id }];
+    for (const e of edits) this.setBlock(e.x, e.y, e.z, e.block, false);
+    this._persistEdits(edits);
+    return true;
+  }
+
+  // Swing a door open or shut (both halves together).
+  toggleDoor(x, y, z) {
+    const b = this.getBlock(x, y, z);
+    if (!isDoor(b)) return false;
+    const nb = doorToggle(b);
+    const edits = [{ x, y, z, block: nb }];
+    const py = this._doorPartnerY(x, y, z, b);
+    if (py !== null) edits.push({ x, y: py, z, block: nb });
+    for (const e of edits) this.setBlock(e.x, e.y, e.z, e.block, false);
+    this._persistEdits(edits);
+    audio.playDoor(isDoorOpen(nb), { x: x + 0.5, y: y + 0.5, z: z + 0.5 });
+    return true;
+  }
+
+  // Break a door: both halves go, never leaving one floating.
+  removeDoor(x, y, z) {
+    const b = this.getBlock(x, y, z);
+    if (!isDoor(b)) return false;
+    const py = this._doorPartnerY(x, y, z, b);
+    const cells = [[x, y, z]];
+    if (py !== null) cells.push([x, py, z]);
+    const edits = [];
+    for (const [cx, cy, cz] of cells) {
+      this.setBlock(cx, cy, cz, AIR, false);
+      this.spawnBreakBurst(cx, cy, cz, blockColor(b));
+      edits.push({ x: cx, y: cy, z: cz, block: AIR });
+    }
+    this._persistEdits(edits);
+    return true;
   }
 
   // A cell next to water just opened up. Water connected to the world's water
@@ -709,6 +781,16 @@ export class World {
           }
           this.setBlock(bx, by, bz, AIR, false);
           removed.push({ x: bx, y: by, z: bz, block: AIR });
+          // Doors are pairs: if the blast caught one half, take the other
+          // too — never leave half a door hanging over the crater.
+          if (isDoor(b)) {
+            for (const py of [by - 1, by + 1]) {
+              if (this.getBlock(bx, py, bz) === b) {
+                this.setBlock(bx, py, bz, AIR, false);
+                removed.push({ x: bx, y: py, z: bz, block: AIR });
+              }
+            }
+          }
         }
 
     // Persist the whole crater in one request (or relay it in multiplayer).

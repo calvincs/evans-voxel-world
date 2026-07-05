@@ -19,7 +19,7 @@ import { Gear } from './gear.js';
 import { MiniMap } from './minimap.js';
 import {
   buildAtlasTexture, BLOCKS, HOTBAR, ALL_BLOCKS, ATLAS_COLS, TILE_PX, blockColor, WATER,
-  isSpawnEgg, SPAWN_EGGS, EGG_COLORS,
+  isSpawnEgg, SPAWN_EGGS, EGG_COLORS, isDoor,
 } from './blocks.js';
 
 const $ = (id) => document.getElementById(id);
@@ -620,6 +620,7 @@ async function startGame(worldId, demo) {
   // Corner minimap: you at the centre, village ring, friends + creatures as dots.
   const minimap = new MiniMap(world, player, remotes, mobs, $('minimap'), cfg.village);
   player.onStrike = (x, y, z, b) => gear.strike(x, y, z, b);
+  player.onMsg = (m) => toast(m, 3500);       // gameplay tips (first door, …)
   const myName = currentUser ? currentUser.name : 'Player';
   const roster = new Map();       // id -> { name }
   const voiceIds = new Set();     // ids currently in voice
@@ -1121,9 +1122,17 @@ function drawBlockIcon(canvas, atlasCanvas, block, size) {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, size, size);
   if (isSpawnEgg(block)) { drawEggIcon(ctx, block, size); return; }
-  const t = BLOCKS[block].side;
-  ctx.drawImage(atlasCanvas, (t % ATLAS_COLS) * TILE_PX, Math.floor(t / ATLAS_COLS) * TILE_PX,
-    TILE_PX, TILE_PX, 0, 0, size, size);
+  const tile = (t, dx, dy, dw, dh) =>
+    ctx.drawImage(atlasCanvas, (t % ATLAS_COLS) * TILE_PX, Math.floor(t / ATLAS_COLS) * TILE_PX,
+      TILE_PX, TILE_PX, dx, dy, dw, dh);
+  if (isDoor(block)) {
+    // Doors are tall: window half over handle half, door-shaped in the slot.
+    const w = size * 0.56, x0 = (size - w) / 2;
+    tile(BLOCKS[block].top, x0, 0, w, size / 2);
+    tile(BLOCKS[block].bottom, x0, size / 2, w, size / 2);
+    return;
+  }
+  tile(BLOCKS[block].side, 0, 0, size, size);
 }
 
 function drawEggIcon(ctx, block, size) {

@@ -175,6 +175,14 @@ pumpkin, snow…). Three are special:
   night**, with a gentle flame-like flicker. Place a few to light up a build
   after dark; nearby blocks are lit by real warm point-lights that follow the
   closest glowstones to you.
+- **Door** — place one and a proper two-block-tall door stands up, facing
+  you. **Click a door to swing it open or shut** — no tool needed, whatever
+  you're holding. Closed doors are solid and creatures can't work a handle,
+  so a shut door keeps the night's wolves and spiders outside your base.
+  An open door is a real doorway: walk (and aim) straight through the
+  opening — only the swung-aside panel answers a click. Breaking either half
+  removes the whole door, and doors persist, sync to friends, and rewind
+  like any other block.
 
 **Water flows.** Pour a water block into a hole and it streams downhill to the
 deepest spot; keep pouring and the basin fills up layer by layer. Break a
