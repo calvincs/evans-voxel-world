@@ -4,6 +4,26 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-05 — Daytime stops paying for night lights (and mute means idle)
+
+**Why:** every pixel on screen computed all 8 glowstone point-lights all day
+long, even though they only shine after dark — the pool was kept "visible at
+intensity 0" because toggling it used to recompile shaders and hitch right at
+nightfall. And with the sound muted, the audio engine kept synthesizing wind
+and ambience at zero volume, forever.
+
+**What changed:**
+- Both shader variants (lights on / lights off) are compiled once behind the
+  loading screen, so the glow-light pool can now really switch off by day and
+  on at dusk — nightfall is a cache hit, never a compile hitch. Daytime (most
+  of a session) renders with no point-light loop at all; night looks exactly
+  as before. Verified headless: zero new shader programs across day↔night.
+- Muting the sound now parks the AudioContext (unless voice chat is active),
+  so 🔇 also means "no audio CPU". Sound effects aren't even synthesized
+  while muted. Unmute picks everything back up instantly.
+- The coordinates/clock readout rebuilds ~4×/s instead of every frame, and
+  the who's-talking highlight only touches the page when a state flips.
+
 ## 2026-07-05 — Stop re-doing work that never changes (scene & minimap)
 
 **Why:** each frame recomputed things that are static — matrices for chunk

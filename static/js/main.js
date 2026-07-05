@@ -537,6 +537,36 @@ async function startGame(worldId, demo) {
   buildHotbar(atlas.image, player);
   world.update(spawn.x, spawn.z);   // preload spawn chunks
 
+  // Compile both shader variants (glow lights on / off) once, behind the
+  // loading screen. Nightfall toggles the light pool's visibility, which
+  // switches every lit material to a different shader program — prewarming
+  // both means the switch is a cache hit, never a mid-play compile hitch.
+  // Dummy meshes cover each lit-material combo the game uses (the world's
+  // three atlas materials, plain-colour creatures/characters, skinned
+  // creatures, and the unlit basics), since compile() only sees visible ones.
+  (function prewarmShaders() {
+    const group = new THREE.Group();
+    const geo = new THREE.BoxGeometry(0.01, 0.01, 0.01);
+    const extras = [
+      new THREE.MeshLambertMaterial({ color: 0xffffff }),        // mobs/characters
+      new THREE.MeshLambertMaterial({ map: atlas }),             // skinned mobs
+      new THREE.MeshBasicMaterial({ color: 0xffffff }),          // eyes/overlays
+    ];
+    for (const m of [world.materials.opaque, world.materials.water,
+                     world.materials.glow, ...extras]) {
+      group.add(new THREE.Mesh(geo, m));
+    }
+    group.position.set(spawn.x, spawn.y, spawn.z);
+    scene.add(group);
+    for (const on of [true, false]) {
+      for (const L of world.glowLights) L.visible = on;
+      renderer.compile(scene, camera);
+    }
+    scene.remove(group);
+    geo.dispose();
+    for (const m of extras) m.dispose();
+  })();
+
   const mobs = new Mobs(scene, world, assets.textures, (m) => toast(m, 3500));
   mobs.peaceful = !!cfg.peaceful;                         // UI state; server enforces it
   mobs.village = cfg.village || null;                     // data only (tests, future UI)
@@ -685,7 +715,11 @@ async function startGame(worldId, demo) {
     return r ? r.cur : null;
   });
   voice.onRoster = (id, inVoice) => { if (inVoice) voiceIds.add(id); else voiceIds.delete(id); renderRoster(); };
-  voice.onState = () => { updateVoiceButton(); renderRoster(); };
+  voice.onState = () => {
+    audio.setVoiceActive(voice.enabled);   // keeps the ctx awake while in voice
+    updateVoiceButton();
+    renderRoster();
+  };
   voice.onPeerState = (id, state) => {
     const name = (roster.get(id) || {}).name || `Player ${id}`;
     if (state === 'connected') toast(`🔊 Voice connected to ${name}`, 2500);
@@ -724,11 +758,14 @@ async function startGame(worldId, demo) {
     }
   }
 
-  // Toggle the green "speaking" highlight on roster rows each frame.
+  // Toggle the green "speaking" highlight on roster rows — only touching the
+  // DOM when a row's state actually flips, not 60×/s.
   function updateRosterSpeaking() {
     rosterEls.forEach((row, id) => {
-      const sp = id === net.myId ? voice.selfSpeaking : voice.isSpeaking(id);
-      row.classList.toggle('speaking', !!sp);
+      const sp = !!(id === net.myId ? voice.selfSpeaking : voice.isSpeaking(id));
+      if (row._speaking === sp) return;
+      row._speaking = sp;
+      row.classList.toggle('speaking', sp);
     });
   }
 
@@ -792,7 +829,7 @@ async function startGame(worldId, demo) {
     updateVoiceButton();
   }
 
-  window.game = { world, player, sky, remotes, net, voice, mobs, gear, minimap };
+  window.game = { world, player, sky, remotes, net, voice, mobs, gear, minimap, renderer };
 
   // Swap the menu for the play screen.
   $('menu').classList.add('hidden');
@@ -988,6 +1025,7 @@ async function startGame(worldId, demo) {
   const coordsEl = $('coords');
   const underwaterEl = $('underwater');
   let lastCoords = '';
+  let hudT = 1;              // refresh the readout on the first frame
   let lastFrame = performance.now();
   function loop() {
     requestAnimationFrame(loop);
@@ -1038,13 +1076,18 @@ async function startGame(worldId, demo) {
       if (lastSel !== -1) toast(BLOCKS[HOTBAR[player.selected]].name, 1200);
       lastSel = player.selected;
     }
-    // Only touch the DOM when the shown text actually changes (most frames it
-    // doesn't — coords are whole numbers and the clock ticks once a minute).
-    // The sun/moon icon is the pre-reader's night warning.
-    const phase = sky.daylight > 0.5 ? '☀️' : sky.daylight < 0.35 ? '🌙' : '🌄';
-    const cstr =
-      `x ${player.pos.x.toFixed(0)}  y ${player.pos.y.toFixed(0)}  z ${player.pos.z.toFixed(0)}  ·  ${phase} ${sky.clock()}`;
-    if (cstr !== lastCoords) { coordsEl.textContent = cstr; lastCoords = cstr; }
+    // The coords/clock readout changes about once a second, so build and
+    // compare its string ~4×/s instead of every frame (it's a nav readout —
+    // a quarter-second of lag is imperceptible). The sun/moon icon is the
+    // pre-reader's night warning.
+    hudT += dt;
+    if (hudT >= 0.25) {
+      hudT = 0;
+      const phase = sky.daylight > 0.5 ? '☀️' : sky.daylight < 0.35 ? '🌙' : '🌄';
+      const cstr =
+        `x ${player.pos.x.toFixed(0)}  y ${player.pos.y.toFixed(0)}  z ${player.pos.z.toFixed(0)}  ·  ${phase} ${sky.clock()}`;
+      if (cstr !== lastCoords) { coordsEl.textContent = cstr; lastCoords = cstr; }
+    }
 
     renderer.render(scene, camera);
   }

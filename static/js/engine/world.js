@@ -97,19 +97,23 @@ export class World {
 
     // Glowstone light sources. We track every glowstone position and let a
     // small pool of point lights follow the nearest ones to the player, so the
-    // light count stays bounded no matter how many are placed. The lights stay
-    // visible (intensity 0 when idle): three.js keys shader programs on the
-    // active light count, so toggling visibility forces program recompiles —
-    // a burst of frame hitches right at nightfall.
+    // light count stays bounded no matter how many are placed. The pool is
+    // toggled visible as one group at nightfall and hidden again by day —
+    // three.js keys shader programs on the active light count, so daytime
+    // (most of a session) renders with a shader that has NO point-light loop
+    // at all. Both program variants are prewarmed behind the loading screen
+    // (main.js prewarmShaders), so the toggle never hitches mid-play.
     this.glow = new Map();       // "x,y,z" -> [gx, gy, gz] for every loaded glowstone
     this._glowT = 0;
     this._glowAssignT = 1;       // force an assignment on the first night frame
     this._glowDirty = true;
     this._glowSlots = new Array(GLOW_LIGHTS).fill(null);
     this._px = 0; this._pz = 0;
+    this._lightsOn = false;
     this.glowLights = [];
     for (let i = 0; i < GLOW_LIGHTS; i++) {
       const L = new THREE.PointLight(GLOW_COLOR, 0, GLOW_LIGHT_DIST, 1.7);
+      L.visible = false;
       this.scene.add(L);
       this.glowLights.push(L);
     }
@@ -577,7 +581,8 @@ export class World {
     this.glow.clear();
     this._glowDirty = true;
     this._glowSlots.fill(null);
-    for (const L of this.glowLights) L.intensity = 0;
+    this._lightsOn = false;
+    for (const L of this.glowLights) { L.intensity = 0; L.visible = false; }
   }
 
   // --- Block index (glowstone lights) -----------------------------------------
@@ -609,11 +614,16 @@ export class World {
     // The block's own glow: faint by day, blazing + flickering at night.
     this.materials.glow.emissiveIntensity = 0.3 + night * 0.95 * flick;
 
+    // Flip the whole pool together (exactly two shader variants: 0 lights or
+    // all of them), with a little hysteresis so dusk doesn't flap the toggle.
     const lights = this.glowLights;
-    if (night < 0.03 || this.glow.size === 0) {
-      for (const L of lights) L.intensity = 0;   // never toggle .visible (recompiles)
-      return;
+    const wantOn = this.glow.size > 0
+      && (this._lightsOn ? night >= 0.02 : night >= 0.05);
+    if (wantOn !== this._lightsOn) {
+      this._lightsOn = wantOn;
+      for (const L of lights) L.visible = wantOn;
     }
+    if (!wantOn) return;         // daytime: no light work, no fragment cost
     // Hand the light pool to the nearest glowstones (horizontal distance).
     // Assignment only changes as the player moves, so recompute it a few times
     // a second instead of sorting every frame; flicker stays per-frame.
@@ -662,6 +672,8 @@ export class World {
     const bscale = isProx(b) ? 0.5 : 1;
     const mesh = new THREE.Mesh(this._primeGeo, this._primeMat);
     mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
     this.scene.add(mesh);
     this.fuses.push({ x, y, z, key: k, t: fuse, bscale, mesh });
     audio.playIgnite({ x: x + 0.5, y: y + 0.5, z: z + 0.5 });
@@ -740,6 +752,7 @@ export class World {
     const mat = new THREE.PointsMaterial({
       color, size, transparent: true, depthWrite: false, fog: false });
     const points = new THREE.Points(geo, mat);
+    points.matrixAutoUpdate = false;   // animation lives in the attribute, not the matrix
     this.scene.add(points);
     this.particles.push({ points, vel, life, maxLife: life });
   }

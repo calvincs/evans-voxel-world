@@ -23,6 +23,25 @@ const SFX_LEVEL = 0.7;
 let soundOn = true;
 try { soundOn = localStorage.getItem('evans-sound') !== '0'; } catch (_) {}
 
+// With sound muted the whole DSP graph (wind loop, filters, ambience) used to
+// keep processing at gain ~0 forever — real CPU on old machines, for silence.
+// When sound is off AND voice chat isn't active, park the AudioContext.
+let voiceActive = false;
+let suspendTimer = null;
+export function setVoiceActive(on) { voiceActive = on; _syncSuspend(); }
+function _syncSuspend() {
+  if (!ctx) return;
+  clearTimeout(suspendTimer);
+  if (!soundOn && !voiceActive) {
+    // Give the mute fade a moment to finish, then stop the clock entirely.
+    suspendTimer = setTimeout(() => {
+      if (!soundOn && !voiceActive && ctx.state === 'running') ctx.suspend();
+    }, 400);
+  } else if (ctx.state === 'suspended') {
+    ctx.resume();
+  }
+}
+
 const OVERRIDE_NAMES = ['music', 'break', 'place', 'step', 'explode'];
 const EXTS = ['mp3', 'ogg', 'wav'];
 const pendingBuffers = {};   // name -> ArrayBuffer fetched before ctx exists
@@ -132,6 +151,7 @@ export function resume() {
 
   if (soundOn) startMusic();   // start generative music immediately
   startAmbience();             // birds / crickets / wind (routes under the mute)
+  _syncSuspend();              // muted + no voice: park the graph right away
 }
 
 export function isSoundOn() { return soundOn; }
@@ -144,6 +164,7 @@ export function toggleSound() {
   // "no scary sounds at night", not "no music but the growls stay".
   sfxGain.gain.setTargetAtTime(soundOn ? SFX_LEVEL : 0.0001, ctx.currentTime, 0.1);
   if (soundOn) startMusic(); else stopMusic();
+  _syncSuspend();
   return soundOn;
 }
 
@@ -213,7 +234,7 @@ function playSample(name, d) {
 // Every effect takes an optional world position `pos`; pass it for other
 // players' actions so they're heard in space, omit it for your own.
 export function playBreak(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 30); if (!d) return;
   if (samples.break) return playSample('break', d);
   const t0 = ctx.currentTime;
@@ -235,7 +256,7 @@ export function playBreak(pos) {
 }
 
 export function playPlace(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 30); if (!d) return;
   if (samples.place) return playSample('place', d);
   const t0 = ctx.currentTime;
@@ -250,7 +271,7 @@ export function playPlace(pos) {
 
 // Spark / fuse-light tick when igniting TNT.
 export function playIgnite(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 24); if (!d) return;
   const t0 = ctx.currentTime;
   const src = noiseSource();
@@ -263,7 +284,7 @@ export function playIgnite(pos) {
 
 // Big boom for TNT (carries further than other effects).
 export function playExplosion(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 50); if (!d) return;
   if (samples.explode) return playSample('explode', d);
   const t0 = ctx.currentTime;
@@ -286,7 +307,7 @@ export function playExplosion(pos) {
 
 // You took a hit — short low "oof" thump (always local, so no position).
 export function playHurt() {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const t0 = ctx.currentTime;
   const o = ctx.createOscillator();
   o.type = 'square';
@@ -299,7 +320,7 @@ export function playHurt() {
 
 // Plunging into water.
 export function playSplash(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 24); if (!d) return;
   const t0 = ctx.currentTime;
   const src = noiseSource();
@@ -314,7 +335,7 @@ export function playSplash(pos) {
 
 // A hostile creature has spotted you — low growl, fair warning before the bite.
 export function playGrowl(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 20); if (!d) return;
   const t0 = ctx.currentTime;
   const o = ctx.createOscillator();
@@ -330,7 +351,7 @@ export function playGrowl(pos) {
 
 // A swing connected with a creature — fleshy smack, distinct from block-break.
 export function playMobHit(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 24); if (!d) return;
   const t0 = ctx.currentTime;
   const src = noiseSource();
@@ -350,7 +371,7 @@ export function playMobHit(pos) {
 
 // A creature went down — sad little descending whistle.
 export function playMobDeath(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 26); if (!d) return;
   const t0 = ctx.currentTime;
   const o = ctx.createOscillator();
@@ -364,7 +385,7 @@ export function playMobDeath(pos) {
 
 let stepSalt = 7;
 export function playStep(pos) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const d = dest(pos, 18); if (!d) return;
   if (samples.step) return playSample('step', d);
   stepSalt = (stepSalt * 1103515245 + 12345) & 0x7fffffff;
@@ -447,7 +468,7 @@ function cricketChirp(t0) {
 // Gentle notification chimes: 'join' rises, 'leave' falls, 'dawn' is a little
 // three-note sunrise fanfare.
 export function playChime(kind) {
-  if (!ctx) return;
+  if (!ctx || !soundOn) return;
   const t0 = ctx.currentTime;
   const seq = kind === 'leave' ? [523.25, 392.0]
     : kind === 'dawn' ? [392.0, 523.25, 659.25]
