@@ -31,6 +31,17 @@ export class MiniMap {
     this.ctx = canvas.getContext('2d');
     this.tiles = new Map();          // "cx,cz" -> {canvas, ver}
     this.sizeIdx = 0;
+    // Tiles change rarely (edits, chunk loads) while the map redraws 60×/s,
+    // so they're composed onto ONE layer canvas; each frame then draws that
+    // single image instead of ~170 per-tile drawImage calls.
+    this._span = 2 * (RENDER_DISTANCE + 1) + 1;
+    this._layer = document.createElement('canvas');
+    this._layer.width = this._span * DIM.CX;
+    this._layer.height = this._span * DIM.CZ;
+    this._layerCtx = this._layer.getContext('2d');
+    this._layerCx0 = null;           // chunk coords of the layer's NW tile
+    this._layerCz0 = null;
+    this._layerDirty = true;
     this._applySize();
 
     canvas.addEventListener('click', (e) => { e.stopPropagation(); this.cycle(); });
@@ -98,12 +109,34 @@ export class MiniMap {
       const k = key(chunk.cx, chunk.cz);
       if (chunk.mapDirty !== false || !this.tiles.has(k)) {
         this._buildTile(chunk);
+        this._layerDirty = true;
         budget--;
       }
     }
     if (this.tiles.size > world.chunks.size + 16) {    // prune after eviction
       for (const k of this.tiles.keys()) {
         if (!world.chunks.has(k)) this.tiles.delete(k);
+      }
+      this._layerDirty = true;
+    }
+
+    // Re-compose the tile layer only when a tile changed or its window moved.
+    const ccx = floorDiv(p.pos.x, CX), ccz = floorDiv(p.pos.z, CZ);
+    const R = RENDER_DISTANCE + 1;
+    const cx0 = ccx - R, cz0 = ccz - R;
+    if (cx0 !== this._layerCx0 || cz0 !== this._layerCz0) {
+      this._layerCx0 = cx0; this._layerCz0 = cz0;
+      this._layerDirty = true;
+    }
+    if (this._layerDirty) {
+      this._layerDirty = false;
+      const lc = this._layerCtx;
+      lc.clearRect(0, 0, this._layer.width, this._layer.height);
+      for (let dz = 0; dz < this._span; dz++) {
+        for (let dx = 0; dx < this._span; dx++) {
+          const t = this.tiles.get(key(cx0 + dx, cz0 + dz));
+          if (t) lc.drawImage(t.canvas, dx * CX, dz * CZ);
+        }
       }
     }
 
@@ -126,14 +159,7 @@ export class MiniMap {
     ctx.scale(BLOCK_PX, BLOCK_PX);
     ctx.translate(-p.pos.x, -p.pos.z);
 
-    const ccx = floorDiv(p.pos.x, CX), ccz = floorDiv(p.pos.z, CZ);
-    const R = RENDER_DISTANCE + 1;
-    for (let dz = -R; dz <= R; dz++) {
-      for (let dx = -R; dx <= R; dx++) {
-        const t = this.tiles.get(key(ccx + dx, ccz + dz));
-        if (t) ctx.drawImage(t.canvas, (ccx + dx) * CX, (ccz + dz) * CZ);
-      }
-    }
+    ctx.drawImage(this._layer, cx0 * CX, cz0 * CZ);
 
     // Village ring (helps a lost kid find the way back to town).
     if (this.village) {

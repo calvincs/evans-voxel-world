@@ -118,6 +118,10 @@ export class Chunk {
     const mesh = new THREE.Mesh(geo, material);
     // Local positions are relative to this chunk's origin.
     mesh.position.set(this.cx * DIM.CX, 0, this.cz * DIM.CZ);
+    // Chunk meshes never move — freeze the matrix so three.js doesn't
+    // recompose and re-multiply it for every chunk on every frame.
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
     mesh.frustumCulled = true;
     this[key] = mesh;
     world.scene.add(mesh);

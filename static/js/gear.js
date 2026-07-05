@@ -152,6 +152,8 @@ export class Gear {
     if (!m) {
       const mesh = new THREE.Mesh(this._overlayGeo, this._armMat);
       mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
       this.world.scene.add(mesh);
       m = { x, y, z, mesh };
       this.mines.set(k, m);

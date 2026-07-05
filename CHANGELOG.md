@@ -4,6 +4,21 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-05 — Stop re-doing work that never changes (scene & minimap)
+
+**Why:** each frame recomputed things that are static — matrices for chunk
+meshes that never move, a starfield drawn invisibly all day, and ~170 little
+minimap tile draws for a picture that changes only when a block does.
+
+**What changed:**
+- Chunk meshes, creature/character body parts (everything except the swinging
+  limbs and turning heads), name tags, mine overlays and debris freeze their
+  local matrices — three.js stops recomposing them 60×/s.
+- The starfield is skipped entirely while fully transparent (all day).
+- The minimap composes its chunk tiles onto one layer canvas, rebuilt only
+  when a tile or the visible window changes; each frame draws a single image
+  plus the markers. Its measured cost dropped ~40× — same map, same pixels.
+
 ## 2026-07-05 — Old machines: adapt when WebGL runs on the CPU
 
 **Why:** profiling showed that on old or blacklisted GPUs, Chrome quietly runs

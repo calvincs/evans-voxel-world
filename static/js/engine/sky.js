@@ -123,9 +123,12 @@ export class Sky {
     this.clouds.material.opacity = lerp(0.35, 0.9, day);
     this.clouds.material.color.setRGB(lerp(0.4, 1, day), lerp(0.4, 1, day), lerp(0.5, 1, day));
 
-    // Stars: visible only when it's dark.
-    this.stars.position.set(playerPos.x, 0, playerPos.z);
-    this.starsMat.opacity = clamp01(1 - day * 1.4);
+    // Stars: visible only when it's dark. Fully transparent stars used to be
+    // drawn anyway (700 points, every frame, all day) — skip them entirely.
+    const starO = clamp01(1 - day * 1.4);
+    this.starsMat.opacity = starO;
+    this.stars.visible = starO > 0.01;
+    if (this.stars.visible) this.stars.position.set(playerPos.x, 0, playerPos.z);
   }
 
   // 0..24 clock string for the HUD. time 0 = midnight, 0.25 = dawn,

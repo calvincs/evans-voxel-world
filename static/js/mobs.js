@@ -290,6 +290,12 @@ class Mob {
       eye: new THREE.MeshBasicMaterial({ color: 0x1a1a1a }),
     };
     this.legs = BUILDERS[t.shape](t, mats, this.group);
+    // Only the limb pivot GROUPS animate; every mesh is rigid relative to its
+    // parent. Freeze their local matrices so a dozen nodes per creature stop
+    // recomposing each frame (world matrices still follow the moving group).
+    this.group.traverse((o) => {
+      if (o !== this.group && !o.isGroup) { o.matrixAutoUpdate = false; o.updateMatrix(); }
+    });
     // Lambert materials whose emissive we pulse red on a hit.
     this.flashMats = [mats.body, mats.head, mats.leg];
 

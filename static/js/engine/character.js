@@ -62,6 +62,12 @@ export class Character {
     this.legR = limb(LEG_W, LEG_H, LEG_W, PANTS, LEG_H, LEG_W / 2);
     this.group.add(this.armL, this.armR, this.legL, this.legR);
 
+    // The head and limb pivot groups rotate; the meshes inside them are rigid.
+    // Freeze the rigid ones so they don't recompose matrices every frame.
+    this.group.traverse((o) => {
+      if (o !== this.group && !o.isGroup) { o.matrixAutoUpdate = false; o.updateMatrix(); }
+    });
+
     scene.add(this.group);
   }
 
@@ -86,6 +92,8 @@ export class Character {
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
     spr.scale.set(1.6, 0.4, 1);
     spr.position.y = LEG_H + TORSO_H + HEAD + 0.35;
+    spr.matrixAutoUpdate = false;
+    spr.updateMatrix();
     this.label = spr;
     this.group.add(spr);
   }
@@ -107,6 +115,8 @@ export class Character {
       this._speakSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
       this._speakSprite.scale.set(0.45, 0.45, 1);
       this._speakSprite.position.y = LEG_H + TORSO_H + HEAD + 0.75;
+      this._speakSprite.matrixAutoUpdate = false;
+      this._speakSprite.updateMatrix();
       this.group.add(this._speakSprite);
     }
     if (this._speakSprite) this._speakSprite.visible = on;
