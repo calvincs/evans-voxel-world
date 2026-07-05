@@ -4,6 +4,19 @@ A running log of the hardening & polish pass (started 2026-07-02), newest first.
 Each entry maps to one commit, so any change can be reverted on its own with
 `git revert <commit>`.
 
+## 2026-07-05 — Old machines: adapt when WebGL runs on the CPU
+
+**Why:** profiling showed that on old or blacklisted GPUs, Chrome quietly runs
+WebGL on a software rasterizer (SwiftShader) — every pixel becomes CPU work,
+which is exactly the "high CPU, poor performance" seen on older machines.
+
+**What changed:**
+- The game now detects a software WebGL renderer at boot and, only then,
+  turns off MSAA antialiasing and renders at 1:1 device pixels. Machines with
+  real GPUs are pixel-for-pixel unchanged.
+- Measured headless (which uses SwiftShader, standing in for those machines):
+  25 → 39 fps with the full perf pass, in the same scene.
+
 ## 2026-07-02 — The monster trap (new mine mode)
 
 **Why:** the mine modes could hurt people and friendly animals — there was no
