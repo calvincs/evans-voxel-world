@@ -13,6 +13,11 @@ __pycache__/
 *.log
 .DS_Store
 
+# Claude Code local files — never publish
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
 # TLS certs (machine-specific, may contain a private key)
 /certs/
 
