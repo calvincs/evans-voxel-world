@@ -378,14 +378,19 @@ function chooseWorld() {
         return;
       }
       for (const w of worlds) {
+        // A card per world: name on its own wrapping line, badges + meta under
+        // it, then a footer with a big Play and the owner tools. The whole
+        // card starts the world; the buttons stopPropagation.
         const row = document.createElement('div');
         row.className = 'world-row';
+        row.onclick = () => resolve(w.id);
 
-        const info = document.createElement('div');
-        info.className = 'world-info';
-        const nm = document.createElement('span');
+        const nm = document.createElement('div');
         nm.className = 'world-name'; nm.textContent = w.name;
-        info.appendChild(nm);
+        row.appendChild(nm);
+
+        const sub = document.createElement('div');
+        sub.className = 'world-sub';
         const badges = document.createElement('div');
         badges.className = 'world-badges';
         badges.appendChild(badge(w.public ? 'public' : 'private',
@@ -393,24 +398,27 @@ function chooseWorld() {
         if (w.mine) badges.appendChild(badge('mine', '★ Yours'));
         else if (w.unclaimed) badges.appendChild(badge('unclaimed', 'Unclaimed'));
         else if (w.ownerName) badges.appendChild(badge('', 'by ' + w.ownerName));
-        info.appendChild(badges);
+        sub.appendChild(badges);
         const meta = document.createElement('span');
         meta.className = 'world-meta';
         meta.textContent = `${w.edits} edit${w.edits === 1 ? '' : 's'} · ${timeAgo(w.lastPlayed)}`;
-        info.appendChild(meta);
-        info.onclick = () => resolve(w.id);
-        row.appendChild(info);
+        sub.appendChild(meta);
+        row.appendChild(sub);
+
+        const foot = document.createElement('div');
+        foot.className = 'world-foot';
+        row.appendChild(foot);
 
         const play = document.createElement('button');
         play.className = 'world-play'; play.textContent = 'Play ▶';
         play.onclick = (e) => { e.stopPropagation(); resolve(w.id); };
-        row.appendChild(play);
+        foot.appendChild(play);
 
         if (w.mine) {
           const hist = document.createElement('button');
           hist.className = 'world-hist'; hist.title = 'Snapshots / rewind'; hist.textContent = '⏱';
           hist.onclick = (e) => { e.stopPropagation(); openHistory(w.id, w.name); };
-          row.appendChild(hist);
+          foot.appendChild(hist);
 
           const ren = document.createElement('button');
           ren.className = 'world-hist'; ren.title = 'Rename world'; ren.textContent = '✏️';
@@ -422,7 +430,7 @@ function chooseWorld() {
               refresh();
             }
           };
-          row.appendChild(ren);
+          foot.appendChild(ren);
 
           const pea = document.createElement('button');
           pea.className = 'world-hist';
@@ -435,7 +443,7 @@ function chooseWorld() {
             await req('POST', `/api/worlds/${w.id}/peaceful`, { peaceful: !w.peaceful });
             refresh();
           };
-          row.appendChild(pea);
+          foot.appendChild(pea);
 
           const vis = document.createElement('button');
           vis.className = 'world-hist';
@@ -446,7 +454,7 @@ function chooseWorld() {
             await req('POST', `/api/worlds/${w.id}/visibility`, { public: !w.public });
             refresh();
           };
-          row.appendChild(vis);
+          foot.appendChild(vis);
 
           const del = document.createElement('button');
           del.className = 'world-del'; del.title = 'Delete world'; del.textContent = '🗑';
@@ -457,7 +465,7 @@ function chooseWorld() {
               refresh();
             }
           };
-          row.appendChild(del);
+          foot.appendChild(del);
         } else if (w.unclaimed) {
           const claim = document.createElement('button');
           claim.className = 'world-claim'; claim.title = 'Become the owner'; claim.textContent = 'Claim';
@@ -466,7 +474,7 @@ function chooseWorld() {
             await req('POST', `/api/worlds/${w.id}/claim`);
             refresh();
           };
-          row.appendChild(claim);
+          foot.appendChild(claim);
         }
         list.appendChild(row);
       }
