@@ -5,7 +5,7 @@
 # drive or machine if you can.
 #
 # Run it nightly with cron:
-#   0 3 * * *  /home/calvincs/Desktop/EvansGame/tools/backup.sh
+#   0 3 * * *  /path/to/EvansGame/tools/backup.sh
 #
 # Or with a systemd timer alongside the game service (see tools/evansgame.service).
 set -euo pipefail
