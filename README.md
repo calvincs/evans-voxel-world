@@ -8,6 +8,13 @@ voxel engine in the browser (on top of Three.js for the WebGL plumbing) does
 the rendering, physics, and block editing. No game engine, no build step, no
 Node — just Python, JavaScript, and a browser.
 
+| | |
+|:---:|:---:|
+| ![The village at noon](docs/screenshots/village.png) | ![A glowstone cottage at night](docs/screenshots/night.png) |
+| *The village at noon* | *A glowstone cottage after dark — shut the door, the wolves are out* |
+| ![TNT going off](docs/screenshots/tnt.png) | ![Villagers about town](docs/screenshots/villagers.png) |
+| *TNT doing what TNT does* | *Villagers going about their day* |
+
 ## Why this exists
 
 This started as a fun activity to build a game *with* my son rather than just

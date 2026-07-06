@@ -63,6 +63,7 @@ tools/
   test_*.py            headless test suites (see Testing below)
   gen_assets.py        AI-generated art (banner, block tiles)
   gen_mob_texture.py   AI-generated mob skins
+  screenshots.py       stages and captures the README screenshots headlessly
   backup.sh, make_cert.sh, reset_password.py, evansgame.service
 ```
 
